@@ -29,6 +29,34 @@ def synthesize(prompt: str, *, task: str, system: str = "", schema=None,
                  max_tokens=max_tokens, policy=None)
 
 
+def recover(result: dict, keys) -> dict:
+    """Pull named fields from a model result, even if the 9B model nested them.
+
+    qwen sometimes returns the real payload one level down (e.g. stuffed inside a
+    `summary` value, or under a renamed wrapper) instead of at the top level. This
+    looks top-level first, then inside nested dicts and JSON-string values, so a
+    cosmetic nesting never loses the content.
+    """
+    keys = tuple(keys)
+    empty = (None, "", [], {})
+    out = {k: result.get(k) for k in keys}
+    if any(out[k] not in empty for k in keys):
+        return out
+    candidates = [v for v in result.values() if isinstance(v, dict)]
+    for v in result.values():
+        if isinstance(v, str) and v.lstrip().startswith(("{", "[")):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, dict):
+                    candidates.append(parsed)
+            except (ValueError, TypeError):
+                pass
+    for c in candidates:
+        if any(c.get(k) not in empty for k in keys):
+            return {k: c.get(k) for k in keys}
+    return out
+
+
 def first_list(d: dict):
     """Return the first list value in a (possibly loosely-keyed) model result.
 

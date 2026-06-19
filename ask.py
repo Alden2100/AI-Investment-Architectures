@@ -240,6 +240,208 @@ def _child_env() -> dict:
     return env
 
 
+# --------------------------------------------------------------------------- #
+# Human-readable rendering. The orchestrators emit machine JSON (dossier + model
+# fields); we format a clean report from the RELIABLE structured fields rather than
+# trusting the model's free-text `summary`, which a 9B model sometimes returns as a
+# nested blob. Works the same with or without an API key.
+# --------------------------------------------------------------------------- #
+def _money(v):
+    try:
+        return f"${float(v):,.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _pct(v):
+    try:
+        return f"{float(v) * 100:+.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _line(v) -> str:
+    """One readable line from a scalar / dict (pick its most descriptive fields)."""
+    if isinstance(v, (str, int, float)):
+        return str(v).strip()
+    if isinstance(v, dict):
+        for key in ("description", "detail", "text", "note", "thesis", "change", "reason"):
+            if isinstance(v.get(key), str) and v[key].strip():
+                quals = [str(v[k]) for k in ("status", "type", "ticker", "section", "metric")
+                         if isinstance(v.get(k), (str, int, float)) and str(v[k]).strip()]
+                return (" ".join(quals) + " — " if quals else "") + v[key].strip()
+        return ", ".join(f"{k}: {x}" for k, x in v.items()
+                         if isinstance(x, (str, int, float)) and str(x).strip())
+    return str(v)
+
+
+def _bullets(v, limit=12) -> list:
+    """Readable bullet lines from a model field that may be str / list / dict."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return ["  " + v.strip()] if v.strip() else []
+    if isinstance(v, dict):
+        return ["  • " + _line(v)] if _line(v) else []
+    if isinstance(v, list):
+        out = []
+        for item in v[:limit]:
+            s = _line(item)
+            if s:
+                out.append("  • " + s)
+        if len(v) > limit:
+            out.append(f"  … (+{len(v) - limit} more)")
+        return out
+    return ["  " + str(v)]
+
+
+def _diff_lines(blocks, limit=6) -> list:
+    """Readable lines from filing diff blocks, skipping XBRL/boilerplate noise."""
+    out = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        typ = b.get("type", "changed")
+        old = re.sub(r"\s+", " ", (b.get("old") or "")).strip()
+        new = re.sub(r"\s+", " ", (b.get("new") or b.get("text") or "")).strip()
+        text = new or old
+        low = text.lower()
+        if not text or len(text) < 30:
+            continue
+        if "fasb.org" in low or "us-gaap" in low or "xbrl" in low or "http://" in low:
+            continue
+        if typ == "changed" and old and new:
+            out.append(f"  • changed: …{old[:95]}…  →  …{new[:95]}…")
+        else:
+            out.append(f"  • {typ}: {text[:170]}")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _clean_summary(d) -> str:
+    s = d.get("summary")
+    if isinstance(s, str) and s.strip() and not s.lstrip().startswith(("{", "[")):
+        return s.strip()
+    return ""
+
+
+def render(system: str, d: dict) -> str:
+    L = []
+    def add(s=""):
+        L.append(s)
+
+    if system == "valuation":
+        dz = d.get("dossier", {})
+        sc = dz.get("scenarios", {})
+        add(f"VALUATION — {d.get('ticker')}   (price {_money(d.get('current_price'))})")
+        add(f"  DCF intrinsic : {_money(dz.get('dcf_intrinsic'))}   (upside {_pct(dz.get('dcf_upside'))})")
+        add(f"  Scenarios     : bear {_money(sc.get('bear'))} | base {_money(sc.get('base'))} | bull {_money(sc.get('bull'))}")
+        if dz.get("comps_implied"):
+            add(f"  Comps-implied : {_money(dz.get('comps_implied'))}")
+        v = d.get("valuation") or {}
+        if v:
+            vr = v.get("value_range", {}) or {}
+            add(f"  Value range   : {_money(vr.get('low'))} – {_money(vr.get('high'))}  (base {_money(vr.get('base'))})")
+            add(f"  Call          : {str(v.get('recommendation', 'n/a')).upper()}")
+            if v.get("rationale"):
+                add(f"  Rationale     : {_line(v['rationale'])}")
+
+    elif system == "idea-sourcing":
+        rows = d.get("shortlist") or d.get("candidates") or []
+        add(f"IDEA SOURCING — {len(rows)} name(s)")
+        for r in rows:
+            tk = r.get("ticker", "?")
+            verdict = (r.get("verdict") or "").upper()
+            prefix = f"{r['rank']}." if r.get("rank") else "•"
+            head = f"  {prefix} {tk}" + (f"  [{verdict}]" if verdict else "")
+            if r.get("dcf_upside") is not None:
+                head += f"  DCF {_pct(r.get('dcf_upside'))}"
+            add(head)
+            if r.get("thesis"):
+                add(f"      {_line(r['thesis'])}")
+
+    elif system == "portfolio-monitoring":
+        breaches = d.get("breaches", [])
+        add(f"PORTFOLIO MONITORING — {len(d.get('positions', {}))} positions, "
+            f"{len(breaches)} breach(es)")
+        ex = d.get("exposure", {})
+        co = d.get("correlation", {})
+        add(f"  Exposure  : gross {ex.get('gross')}  net {ex.get('net')}  "
+            f"HHI {co.get('herfindahl_index')}  avg-corr {co.get('avg_pairwise_correlation')}")
+        if breaches:
+            add("  Breaches  :")
+            L.extend("  " + b for b in _bullets(breaches))
+        triage = d.get("triage") or []
+        if triage:
+            add("  Triage    :")
+            for t in triage:
+                add(f"    [{str(t.get('status', '?')).upper():6}] {t.get('ticker', '?')} — {_line(t.get('note', ''))}")
+
+    elif system == "filing-intelligence":
+        f = d.get("filing", {})
+        add(f"FILING INTELLIGENCE — {d.get('ticker')} {d.get('form')}  ({f.get('date', 'n/a')})")
+        add(f"  {d.get('change', {}).get('raw_change_count', 0)} material change(s) vs the prior {d.get('form')}")
+        b = d.get("brief")
+        # defend against older outputs where the model nested the brief in `summary`
+        if (not b or not any((b or {}).values())) and isinstance(d.get("summary"), str) \
+                and d["summary"].lstrip().startswith("{"):
+            try:
+                import json as _j
+                b = _j.loads(d["summary"])
+            except ValueError:
+                pass
+        if b and any(b.values()):
+            for key, label in (("what_changed", "What changed"),
+                               ("why_it_matters", "Why it matters"),
+                               ("what_to_watch", "What to watch")):
+                if b.get(key):
+                    add(f"\n  {label}:")
+                    L.extend("  " + x for x in _bullets(b[key]))
+        else:
+            # model narrative was thin; fall back to the deterministic diff (cleaned)
+            diffs = _diff_lines(d.get("change", {}).get("diff_blocks", []))
+            if diffs:
+                add("\n  Notable changes (substantive prose diffs):")
+                L.extend(diffs)
+            else:
+                add("  (no readable prose changes surfaced; see full result)")
+
+    elif system == "reporting":
+        if d.get("kind") == "letter":
+            add(f"INVESTOR LETTER — {d.get('period')}")
+            add("")
+            add(d.get("letter_draft") or "(no draft — set a model route)")
+        else:
+            add(f"IC MEMO — {d.get('ticker')}   (inputs: {', '.join(d.get('inputs_used', []))})")
+            sec = d.get("memo_sections")
+            if isinstance(sec, dict) and sec:
+                for k, v in sec.items():
+                    add(f"\n  {k.replace('_', ' ').title()}")
+                    add(f"    {_line(v)}")
+            elif d.get("draft_text"):
+                add(""); add(d["draft_text"])
+            else:
+                add("  (model route unavailable — inputs gathered; see full result)")
+
+    else:  # scaffolds / fallback
+        add(f"{system.upper()}")
+        for k, v in d.items():
+            if k in ("system", "summary", "output_path", "stub", "next_step"):
+                continue
+            if isinstance(v, (str, int, float)):
+                add(f"  {k}: {v}")
+            elif isinstance(v, (list, dict)) and v:
+                add(f"  {k}:")
+                L.extend("  " + x for x in _bullets(v, limit=8))
+
+    cs = _clean_summary(d)
+    if cs:
+        add("")
+        add("➤ " + cs)
+    return "\n".join(L)
+
+
 def run_system(system: str, argv: list, show_json: bool) -> int:
     import json
     orch = os.path.join(HERE, "systems", system, "orchestrator.py")
@@ -254,19 +456,14 @@ def run_system(system: str, argv: list, show_json: bool) -> int:
     try:
         d = json.loads(proc.stdout)
     except ValueError:
-        # a system emitted non-JSON (rare model-output edge); still surface a summary
-        if show_json:
-            print(proc.stdout); return 0
-        m = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', proc.stdout)
-        print("\n" + "=" * 70)
-        print(m.group(1) if m else proc.stdout.strip()[:1500])
+        print(proc.stdout.strip()[:2000] if not show_json else proc.stdout)
         return 0
     if show_json:
         print(json.dumps(d, indent=2, default=str)); return 0
     print("\n" + "=" * 70)
-    print(d.get("summary", "(no summary)"))
+    print(render(system, d))
     if d.get("output_path"):
-        print(f"\nfull result: {d['output_path']}")
+        print(f"\n  full result: {d['output_path']}")
     return 0
 
 

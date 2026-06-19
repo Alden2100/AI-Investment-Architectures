@@ -94,18 +94,21 @@ def main(args):
     )
     brief = orch.synthesize(prompt, task="synthesis", schema=BRIEF_SCHEMA, max_tokens=2200,
                             system="You are an equity analyst. Precise, skeptical, concise.")
-    if brief.get("_needs_model"):
-        summary = (f"Analyzed {args.ticker.upper()} {args.form} ({meta['date']}); "
-                   f"{chg.get('raw_change_count')} changes vs prior — set a model route "
-                   f"to write the Brief.")
-    else:
-        summary = orch.text_field(brief, "summary") or f"Brief written via {brief.get('_route')}."
+    KEYS = ("what_changed", "why_it_matters", "what_to_watch")
+    brief_fields = None if brief.get("_needs_model") else orch.recover(brief, KEYS)
+    # Always emit a clean, deterministic one-line summary (never the model's raw blob).
+    has_brief = bool(brief_fields and any(brief_fields.values()))
+    summary = (f"{args.ticker.upper()} {args.form} ({meta['date']}): "
+               f"{chg.get('raw_change_count')} material change(s) vs the prior {args.form}; "
+               + (f"Brief written via {brief.get('_route')}."
+                  if has_brief else
+                  "model Brief was thin this run — substantive diffs available "
+                  "(a Claude key yields a fuller Brief)."))
     out = {
         "system": "filing-intelligence",
         "ticker": args.ticker.upper(), "form": args.form,
         "filing": meta, "change": chg, "competitive": comp,
-        "brief": {k: brief.get(k) for k in ("what_changed", "why_it_matters", "what_to_watch")
-                  } if not brief.get("_needs_model") else None,
+        "brief": brief_fields,
         "model_route": brief.get("_route", "none"),
         "summary": summary,
     }
