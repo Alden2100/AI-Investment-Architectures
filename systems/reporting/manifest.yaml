@@ -1,0 +1,21 @@
+name: reporting
+description: >
+  Turn finished research and fund data into committee-ready deliverables: an IC memo
+  for one name (built from DCF + comps + moat + fundamentals) or a periodic
+  investor/LP letter from performance + holdings.
+version: 1.0.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: memo-writer,           version: 1.0.0}
+  - {name: letter-drafter,        version: 1.0.0}
+  - {name: dcf-valuation,         version: 1.0.0}
+  - {name: comps-builder,         version: 1.0.0}
+  - {name: moat-analyzer,         version: 1.0.0}
+  - {name: fundamentals-fetcher,  version: 1.0.0}
+  - {name: deck-updater,          version: 1.0.0}
+  - {name: audit-logger,          version: 1.0.0}
+
+agents:
+  - {name: report-writer,         version: 1.0.0}
