@@ -72,13 +72,16 @@ ALIASES = {
     "salesforce": "CRM", "adobe": "ADBE", "disney": "DIS", "boeing": "BA",
     "walmart": "WMT", "exxon": "XOM", "pepsi": "PEP", "pepsico": "PEP",
 }
-# sector keyword -> SIC prefix
+# sector keyword -> SIC *description* substring (the screener matches on the SIC
+# description text, e.g. "Services-Prepackaged Software", not the numeric code).
 SECTORS = {
-    "software": "7372", "semiconductor": "3674", "semiconductors": "3674",
-    "chip": "3674", "chips": "3674", "bank": "6022", "banks": "6022",
-    "pharma": "2834", "pharmaceutical": "2834", "biotech": "2836",
-    "retail": "5200", "oil": "1311", "energy": "1311", "auto": "3711",
-    "automotive": "3711", "aerospace": "3728", "airline": "4512",
+    "software": "software", "semiconductor": "semiconductor",
+    "semiconductors": "semiconductor", "chip": "semiconductor", "chips": "semiconductor",
+    "bank": "bank", "banks": "bank", "pharma": "pharmaceutical",
+    "pharmaceutical": "pharmaceutical", "biotech": "biological", "retail": "retail",
+    "oil": "petroleum", "energy": "petroleum", "auto": "motor vehicle",
+    "automotive": "motor vehicle", "aerospace": "aircraft", "airline": "air transportation",
+    "insurance": "insurance", "media": "television", "telecom": "telephone",
 }
 _STOP = {"A", "I", "THE", "IS", "IT", "MY", "ME", "AN", "OK", "OR", "TO", "VS",
          "AND", "FOR", "ANY", "ARE", "DCF", "IC", "LP", "WHAT", "HOW", "DO",

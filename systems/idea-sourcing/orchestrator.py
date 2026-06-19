@@ -53,6 +53,11 @@ def screen(args):
     if args.sic_contains:  sargs += ["--sic-contains", args.sic_contains]
     if args.min_mcap:      sargs += ["--min-mcap", args.min_mcap]
     if args.max_mcap:      sargs += ["--max-mcap", args.max_mcap]
+    # Scan deeper than the screener's default-30 when filtering by sector/size, so a
+    # sector screen reaches past the top mega-caps (companies are ordered by market
+    # cap, so this stays "large-cap" while finding more than the 2-3 biggest names).
+    if (args.sic_contains or args.min_mcap or args.max_mcap) and not args.ticker_in:
+        sargs += ["--max-fetch", "160"]
     screened = skillkit.call_skill("universe-screener", sargs)
     matches = screened.get("matches", [])[:int(args.max_candidates)]
     cands = []
@@ -119,6 +124,35 @@ def main(args):
             task="synthesis", schema=RANK_SCHEMA, max_tokens=1400,
             system="Buy-side analyst. Output only the JSON object with 'shortlist' and 'summary'.")
         shortlist = ranked.get("shortlist") or orch.first_list(ranked)
+
+    # Backfill any candidate the model dropped, so every sourced name is represented
+    # (the 9B sometimes ranks only a couple). Missing names are appended in DCF-upside
+    # order with a deterministic numeric thesis and a verdict from the numbers.
+    if shortlist and not ranked.get("_needs_model"):
+        cand_by = {c["ticker"]: c for c in cands}
+        present = {s.get("ticker") for s in shortlist if isinstance(s, dict)}
+        missing = [c for c in cands if c["ticker"] not in present]
+        missing.sort(key=lambda c: (c.get("dcf_upside") is None, -(c.get("dcf_upside") or -9)))
+        nxt = len(shortlist)
+        for c in missing:
+            up = c.get("dcf_upside")
+            verdict = ("pursue" if isinstance(up, (int, float)) and up > 0.15
+                       else "pass" if isinstance(up, (int, float)) and up < -0.2 else "watch")
+            nxt += 1
+            shortlist.append({
+                "ticker": c["ticker"], "rank": nxt, "verdict": verdict,
+                "thesis": (f"DCF upside {up:+.0%}" if isinstance(up, (int, float)) else "DCF n/a")
+                + (f", EV/EBITDA {c['ev_ebitda']:.1f}" if isinstance(c.get("ev_ebitda"), (int, float)) else "")
+                + " (screened; not individually ranked by the model)."})
+    # Attach the computed numbers to every shortlist row (the model schema omits them)
+    # so the table's DCF/valuation columns populate in both the terminal and the PDF.
+    cand_by = {c["ticker"]: c for c in cands}
+    for s in shortlist:
+        if isinstance(s, dict) and s.get("ticker") in cand_by:
+            c = cand_by[s["ticker"]]
+            for fld in ("dcf_upside", "ev_ebitda", "pe", "current_price"):
+                s.setdefault(fld, c.get(fld))
+
     if ranked.get("_needs_model"):
         summary = (f"Sourced {len(cands)} candidate(s): "
                    f"{', '.join(c['ticker'] for c in cands)}; dossier ready — "
