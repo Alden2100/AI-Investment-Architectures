@@ -380,8 +380,18 @@ def render(system: str, d: dict) -> str:
 
     elif system == "filing-intelligence":
         f = d.get("filing", {})
+        ch = d.get("change", {})
+        material = ch.get("material_changes") or []
         add(f"FILING INTELLIGENCE — {d.get('ticker')} {d.get('form')}  ({f.get('date', 'n/a')})")
-        add(f"  {d.get('change', {}).get('raw_change_count', 0)} material change(s) vs the prior {d.get('form')}")
+        add(f"  {ch.get('raw_change_count', 0)} raw diffs · {len(material)} high/medium-significance change(s)")
+        if material:
+            add("\n  Material changes:")
+            for m in material[:10]:
+                sec = m.get("section", "?")
+                sig = str(m.get("significance", "")).strip()
+                txt = (m.get("new") or m.get("old") or "").strip()
+                txt = re.sub(r"\s+", " ", txt)[:160]
+                add(f"  • [{sec}] {txt}" + (f"  ({sig})" if sig and sig.lower() != "unrated" else ""))
         b = d.get("brief")
         # defend against older outputs where the model nested the brief in `summary`
         if (not b or not any((b or {}).values())) and isinstance(d.get("summary"), str) \
@@ -398,9 +408,9 @@ def render(system: str, d: dict) -> str:
                 if b.get(key):
                     add(f"\n  {label}:")
                     L.extend("  " + x for x in _bullets(b[key]))
-        else:
-            # model narrative was thin; fall back to the deterministic diff (cleaned)
-            diffs = _diff_lines(d.get("change", {}).get("diff_blocks", []))
+        elif not material:
+            # no model Brief and no classified changes; show cleaned raw diffs
+            diffs = _diff_lines(ch.get("diff_blocks", []))
             if diffs:
                 add("\n  Notable changes (substantive prose diffs):")
                 L.extend(diffs)

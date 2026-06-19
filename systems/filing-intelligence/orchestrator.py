@@ -58,10 +58,36 @@ def retrieval(ticker, form):
     return meta, excerpt
 
 
+def _similar(a, b):
+    import difflib
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(a=a, b=b).ratio()
+
+
+def _nontrivial(block):
+    """Keep blocks that are real changes, not a one-word reword of an identical para."""
+    old, new = block.get("old", "") or "", block.get("new", "") or ""
+    if block.get("type") in ("added", "removed"):
+        return len((new or old).strip()) >= 40
+    return _similar(old, new) < 0.85 and len(new.strip()) >= 40
+
+
 def change(ticker, form):
     c = skillkit.call_skill("filing-change-detector", ["--ticker", ticker, "--form", form])
+    # The change-detector classifies each change by significance + section (high/medium/
+    # low). Prefer those; fall back to the raw diffs with trivial rewordings filtered out.
+    classified = c.get("changes") or []
+    material = [ch for ch in classified
+                if str(ch.get("significance", "")).lower().startswith(("high", "medium"))
+                or "high" in str(ch.get("significance", "")).lower()
+                or "medium" in str(ch.get("significance", "")).lower()]
+    nontrivial = [b for b in c.get("diff_blocks", []) if _nontrivial(b)][:8]
     return {"raw_change_count": c.get("raw_change_count"),
-            "diff_blocks": c.get("diff_blocks", [])[:10],
+            "change_summary": c.get("summary") if isinstance(c.get("summary"), str) else None,
+            "classified": classified,
+            "material_changes": material,
+            "diff_blocks": nontrivial,
             "prior": c.get("old"), "current": c.get("new")}
 
 
@@ -81,29 +107,44 @@ def main(args):
     chg = change(args.ticker, args.form)
     comp = competitive(args.ticker)
 
-    prompt = (
-        "Write a Filing Intelligence Brief. Return an object with keys "
-        "'what_changed', 'why_it_matters', 'what_to_watch', and 'summary'. Use the "
-        "diff blocks for what changed (flag new/removed risk factors and changed "
-        "guidance; ignore boilerplate), the margins and news for competitive read, "
-        "and the excerpt for business context. Quote numbers exactly.\n\n"
-        f"filing: {json.dumps(meta)}\n"
-        f"change: {json.dumps(chg, default=str)[:6000]}\n"
-        f"competitive: {json.dumps(comp, default=str)[:3000]}\n"
-        f"excerpt: {excerpt[:9000]}"
-    )
-    brief = orch.synthesize(prompt, task="synthesis", schema=BRIEF_SCHEMA, max_tokens=2200,
-                            system="You are an equity analyst. Precise, skeptical, concise.")
+    # Feed the model the HIGH-SIGNAL classified changes (compact), not the raw filing —
+    # a tighter, higher-signal prompt is what the local 9B model handles best.
+    changes_for_model = chg["material_changes"] or chg["classified"] or [
+        {"section": "diff", "new": (b.get("new") or b.get("old", ""))[:300],
+         "significance": "unrated"} for b in chg["diff_blocks"][:6]]
+
+    def _brief_prompt(detail):
+        return (
+            "Write a Filing Intelligence Brief from these classified changes. Return an "
+            "object with keys 'what_changed', 'why_it_matters', 'what_to_watch' (each a "
+            "short paragraph) and 'summary' (one sentence). Focus on the high/medium "
+            "significance items; ignore boilerplate. Quote numbers exactly.\n\n"
+            f"company: {args.ticker.upper()} {args.form} ({meta['date']})\n"
+            f"classified_changes: {json.dumps(changes_for_model, default=str)[:detail]}\n"
+            f"margins: {json.dumps(comp.get('margins', {}), default=str)}\n"
+            f"recent_news: {json.dumps([c['title'] for c in comp.get('external_context', [])][:4])}"
+        )
+
     KEYS = ("what_changed", "why_it_matters", "what_to_watch")
+    brief = orch.synthesize(_brief_prompt(4500), task="synthesis", schema=BRIEF_SCHEMA,
+                            max_tokens=1600,
+                            system="You are an equity analyst. Precise, skeptical, concise.")
     brief_fields = None if brief.get("_needs_model") else orch.recover(brief, KEYS)
+    # one retry with a smaller prompt if the local model came back empty
+    if not brief.get("_needs_model") and not any((brief_fields or {}).values()):
+        brief = orch.synthesize(_brief_prompt(2200), task="synthesis", schema=BRIEF_SCHEMA,
+                                max_tokens=1400,
+                                system="Equity analyst. Output only the JSON object, all four keys filled.")
+        brief_fields = orch.recover(brief, KEYS)
     # Always emit a clean, deterministic one-line summary (never the model's raw blob).
     has_brief = bool(brief_fields and any(brief_fields.values()))
+    n_material = len(chg.get("material_changes") or [])
+    tail = (f"Brief written via {brief.get('_route')}." if has_brief
+            else (chg.get("change_summary")
+                  or "see the classified changes below (a Claude key yields a fuller Brief)."))
     summary = (f"{args.ticker.upper()} {args.form} ({meta['date']}): "
-               f"{chg.get('raw_change_count')} material change(s) vs the prior {args.form}; "
-               + (f"Brief written via {brief.get('_route')}."
-                  if has_brief else
-                  "model Brief was thin this run — substantive diffs available "
-                  "(a Claude key yields a fuller Brief)."))
+               f"{chg.get('raw_change_count')} raw diffs, {n_material} high/medium-significance "
+               f"change(s). {tail}")
     out = {
         "system": "filing-intelligence",
         "ticker": args.ticker.upper(), "form": args.form,
