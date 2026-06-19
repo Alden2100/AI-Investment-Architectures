@@ -77,6 +77,29 @@ Each system has its own `README.md` (pipeline + how to run + manifest) and
 `prompts.md` (tiered example prompts). See [SETUP.md](SETUP.md) for Ollama + qwen +
 venv + keys, and [skills-library/README.md](skills-library/README.md) for the library.
 
+### Prompt it like an LLM (`ask.py` / the `im` command)
+`ask.py` is a natural-language front door: it interprets your request into
+*(system, args)* — the judged part, via keyword heuristics + the router — and
+dispatches to the orchestrator with exact CLI args — the exact part. It always
+prints the plan before running.
+
+```bash
+python ask.py "what's Microsoft worth versus Apple and Google?"   # → valuation
+python ask.py "any catalysts in large-cap software?"              # → idea-sourcing
+python ask.py "is my book ok - NVDA 30%, MSFT 20%, cap 10%?"      # → portfolio-monitoring
+python ask.py "what changed in Coca-Cola's latest 10-K?"          # → filing-intelligence
+python ask.py "write an IC memo for Nvidia"                       # → reporting
+python ask.py -n "..."     # dry-run: print the plan only
+python ask.py valuation --ticker MSFT --peers AAPL GOOGL          # short form still works
+```
+
+For a permanent shortcut runnable from anywhere, add an `im` shell function (one
+line in `~/.zshrc`):
+```bash
+im() { ( cd "/path/to/AI Investment Architectures" && ./.venv/bin/python ask.py "$@" ) }
+# then:  im "is NVDA cheap vs AMD and AVGO?"
+```
+
 ## How this maps to the field guide
 | Guide concept | Here |
 |---|---|
