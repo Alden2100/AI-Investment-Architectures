@@ -1,0 +1,20 @@
+name: filing-intelligence
+description: >
+  One SEC filing -> a Filing Intelligence Brief. Pulls the filing, diffs it against
+  the prior comparable period, reads margins + external news, and writes
+  What-changed / Why-it-matters / What-to-watch.
+version: 1.0.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: filing-fetcher,          version: 1.0.0}
+  - {name: filing-change-detector,  version: 1.0.0}
+  - {name: filing-summarizer,       version: 1.0.0}
+  - {name: earnings-call-summarizer, version: 1.0.0}
+  - {name: moat-analyzer,           version: 1.0.0}
+  - {name: news-fetcher,            version: 1.0.0}
+  - {name: web-search,              version: 1.0.0}
+
+agents:
+  - {name: filing-analyst,          version: 1.0.0}
