@@ -86,6 +86,26 @@ def text_field(d: dict, *keys: str) -> str:
     return ""
 
 
+def synthesize_fields(prompt, keys, *, task, schema, system="", max_tokens=2000,
+                      retry_prompt=None, retry_system=None):
+    """Run the final model step, recover `keys`, and retry once if it comes back empty.
+
+    Returns ``(result, fields)`` where ``fields`` is the recovered dict (or None if no
+    model was available). The retry uses a terser prompt — the local 9B model often
+    succeeds on a smaller, higher-signal second attempt. This is the standard way an
+    orchestrator gets reliable structured narration out of a keyless run.
+    """
+    res = synthesize(prompt, task=task, system=system, schema=schema, max_tokens=max_tokens)
+    if res.get("_needs_model"):
+        return res, None
+    fields = recover(res, keys)
+    if not any((fields or {}).values()) and retry_prompt:
+        res = synthesize(retry_prompt, task=task, schema=schema,
+                         system=retry_system or system, max_tokens=max(1200, max_tokens - 400))
+        fields = recover(res, keys)
+    return res, fields
+
+
 def write_output(name: str, obj: dict) -> str:
     """Persist a deliverable under the system's data/output dir; return its path."""
     out_dir = os.path.join(os.environ.get("TOOLBOX_CACHE_DIR", "."), "output")

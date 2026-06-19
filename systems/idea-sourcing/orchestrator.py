@@ -96,19 +96,29 @@ def main(args):
         return {"candidates": [], "summary": "No names matched the mandate."}
     comps_median = enrich(cands)
 
-    prompt = (
+    # compact, high-signal view of each candidate for the ranking model
+    slim = [{"ticker": c["ticker"], "dcf_upside": c.get("dcf_upside"),
+             "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"),
+             "catalysts": sum((c.get("catalyst_signals") or {}).values())
+             if isinstance(c.get("catalyst_signals"), dict) else 0,
+             "headlines": len(c.get("top_headlines") or [])} for c in cands]
+    instr = (
         "Rank these candidates into an investment shortlist. Return an object with "
         "exactly two keys: 'shortlist' (an array of {ticker, rank, thesis, verdict}) "
-        "and 'summary' (one sentence). Weigh mandate fit, catalyst strength "
-        "(catalyst_signals / top_headlines), and valuation upside (dcf_upside and "
-        "cheapness vs comps_median). verdict is one of pursue/watch/pass. Use only "
-        "the numbers given.\n\n"
-        f"comps_median: {json.dumps(comps_median)}\n"
-        f"candidates: {json.dumps(cands, default=str)}"
-    )
-    ranked = orch.synthesize(prompt, task="synthesis", schema=RANK_SCHEMA, max_tokens=2000,
+        "and 'summary' (one sentence). Weigh mandate fit, catalyst strength, and "
+        "valuation upside (dcf_upside and cheapness vs comps_median). verdict is one of "
+        "pursue/watch/pass. Use only the numbers given.\n\n"
+        f"comps_median: {json.dumps(comps_median)}\n")
+    ranked = orch.synthesize(instr + f"candidates: {json.dumps(slim, default=str)}",
+                             task="synthesis", schema=RANK_SCHEMA, max_tokens=1800,
                              system="You are a disciplined buy-side analyst. Be terse and specific.")
     shortlist = ranked.get("shortlist") or orch.first_list(ranked)
+    if not ranked.get("_needs_model") and not shortlist:
+        ranked = orch.synthesize(
+            instr + f"candidates: {json.dumps([s['ticker'] for s in slim])}",
+            task="synthesis", schema=RANK_SCHEMA, max_tokens=1400,
+            system="Buy-side analyst. Output only the JSON object with 'shortlist' and 'summary'.")
+        shortlist = ranked.get("shortlist") or orch.first_list(ranked)
     if ranked.get("_needs_model"):
         summary = (f"Sourced {len(cands)} candidate(s): "
                    f"{', '.join(c['ticker'] for c in cands)}; dossier ready — "

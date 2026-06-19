@@ -38,19 +38,31 @@ from imrouter import orchestration as orch          # noqa: E402
 
 def build_memo(ticker):
     t = ticker.upper()
+    dcf = skillkit.call_skill("dcf-valuation", ["--ticker", t])
+    comps = skillkit.call_skill("comps-builder", ["--tickers", t, "--target", t])
+    moat = skillkit.call_skill("moat-analyzer", ["--ticker", t])
+    fund = skillkit.call_skill("fundamentals-fetcher",
+                               ["--ticker", t, "--items", "revenue", "net_income",
+                                "operating_income"])
+    # Distill to a compact, high-signal block — the model writes a sharper memo from
+    # clean numbers than from four full raw skill dumps (and the 9B handles it keyless).
     inputs = {
-        "dcf": skillkit.call_skill("dcf-valuation", ["--ticker", t]),
-        "comps": skillkit.call_skill("comps-builder", ["--tickers", t, "--target", t]),
-        "moat": skillkit.call_skill("moat-analyzer", ["--ticker", t]),
-        "fundamentals": skillkit.call_skill("fundamentals-fetcher",
-                                            ["--ticker", t, "--items", "revenue",
-                                             "net_income", "operating_income"]),
+        "price": dcf.get("current_price"),
+        "dcf_intrinsic_per_share": dcf.get("intrinsic_value_per_share"),
+        "dcf_upside": dcf.get("upside_vs_price"),
+        "comps_median": comps.get("median"),
+        "comps_implied_value": comps.get("target_value") or comps.get("implied_value"),
+        "margins": moat.get("margins"),
+        "moat_assessment": moat.get("assessment") if isinstance(moat.get("assessment"), str)
+        else (moat.get("summary") if isinstance(moat.get("summary"), str) else None),
+        "financials": fund.get("financials", {}),
     }
     fd, path = tempfile.mkstemp(suffix=".json", dir=DATA_DIR)
     with os.fdopen(fd, "w") as fh:
         json.dump(inputs, fh, default=str)
     memo = skillkit.call_skill("memo-writer", ["--ticker", t, "--input-file", path])
     os.unlink(path)
+    inputs_used = ["dcf", "comps", "moat", "fundamentals"]  # the source skills distilled in
     route = "claude" if memo.get("_source") == "api" else (
         "local" if memo.get("_source") == "ollama" else "none")
     # Be robust to the local 9B model's schema looseness: memo-writer merges model
@@ -68,7 +80,7 @@ def build_memo(ticker):
                               if needs else f"IC memo drafted for {t} via {route}.")
     return {
         "system": "reporting", "kind": "memo", "ticker": t,
-        "inputs_used": list(inputs.keys()),
+        "inputs_used": inputs_used,
         "memo_sections": sections,
         "draft_text": draft_text,
         "needs_model": needs,

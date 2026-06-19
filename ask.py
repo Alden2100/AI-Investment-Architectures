@@ -434,7 +434,31 @@ def render(system: str, d: dict) -> str:
             else:
                 add("  (model route unavailable — inputs gathered; see full result)")
 
-    else:  # scaffolds / fallback
+    elif system == "due-diligence":
+        dz = d.get("dossier", {})
+        add(f"DUE DILIGENCE — {d.get('ticker')}   (scaffold)")
+        add(f"  DCF upside : {_pct(dz.get('dcf_upside'))}")
+        if dz.get("moat"):
+            add(f"  Margins    : {_line(dz.get('moat'))}")
+        news = dz.get("news") or []
+        if news:
+            add("  Recent news:")
+            for h in news[:5]:
+                add(f"  • {h}")
+
+    elif system == "governance-audit":
+        entries = d.get("recent_audit") or []
+        if isinstance(entries, dict):  # tolerate {entries:[...]} or similar
+            entries = next((v for v in entries.values() if isinstance(v, list)), [])
+        add(f"GOVERNANCE AUDIT — {len(entries)} recent entr(ies)   (scaffold)")
+        for e in (entries if isinstance(entries, list) else [])[:12]:
+            if isinstance(e, dict):
+                add(f"  • {e.get('ts', '')}  {e.get('actor', '')} · {e.get('action', '')}"
+                    f" · {e.get('target', '')} — {_line(e.get('detail', ''))}")
+            else:
+                add(f"  • {_line(e)}")
+
+    else:  # generic fallback
         add(f"{system.upper()}")
         for k, v in d.items():
             if k in ("system", "summary", "output_path", "stub", "next_step"):

@@ -31,17 +31,23 @@ for _p in ("data-fetch", "router", "web-search"):
 from imdata import skillkit                         # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
+# The value range is MATH (bracket of the three methods) — computed in code, not by
+# the model. The model judges only the call + rationale (code-for-exact, model-for-judged).
 VAL_SCHEMA = {
     "type": "object",
     "properties": {
-        "value_range": {"type": "object", "properties": {
-            "low": {"type": "number"}, "base": {"type": "number"}, "high": {"type": "number"}},
-            "required": ["low", "base", "high"]},
         "recommendation": {"type": "string", "enum": ["buy", "hold", "sell"]},
         "rationale": {"type": "string"},
         "summary": {"type": "string"},
-    }, "required": ["value_range", "recommendation", "rationale", "summary"],
+    }, "required": ["recommendation", "rationale", "summary"],
 }
+
+
+def _m(v):
+    try:
+        return f"${float(v):,.2f}"
+    except (TypeError, ValueError):
+        return "n/a"
 
 
 def main(args):
@@ -70,25 +76,41 @@ def main(args):
                       for k in ("bull", "base", "bear")},
         "fundamentals": fund.get("financials", {}),
     }
-    prompt = (
-        "Reconcile these three valuation methods into a defensible value range and a "
-        "buy/hold/sell call. Return keys 'value_range' ({low, base, high} per-share), "
-        "'recommendation' (buy/hold/sell), 'rationale', and 'summary'. low/high should "
-        "bracket the DCF, comps-implied, and scenario spread; base is your central "
-        "estimate. Compare to current_price. Use only these numbers.\n\n"
-        f"{json.dumps(dossier, default=str)}"
-    )
-    val = orch.synthesize(prompt, task="reasoning", schema=VAL_SCHEMA, max_tokens=1800,
-                          system="You are a valuation analyst. Triangulate; show your reasoning briefly.")
-    if val.get("_needs_model"):
-        summary = f"Built DCF/comps/scenario dossier for {t}; set a model route for the range."
-    else:
-        summary = orch.text_field(val, "summary") or f"Valuation for {t} via {val.get('_route')}."
+    # --- deterministic value range: bracket the three methods --------------- #
+    pts = [x for x in (dossier["dcf_intrinsic"], scenarios.get("bear", {}).get("intrinsic_value_per_share"),
+                       scenarios.get("bull", {}).get("intrinsic_value_per_share"),
+                       dossier["comps_implied"]) if isinstance(x, (int, float))]
+    value_range = None
+    if pts:
+        value_range = {"low": round(min(pts), 2), "high": round(max(pts), 2),
+                       "base": round(dossier["dcf_intrinsic"], 2)
+                       if isinstance(dossier["dcf_intrinsic"], (int, float)) else round(sorted(pts)[len(pts)//2], 2)}
+
+    instr = (
+        "Give a buy/hold/sell call on this stock and explain it. Return keys "
+        "'recommendation' (buy/hold/sell), 'rationale' (2-3 sentences), and 'summary' "
+        "(one sentence). Compare the computed value_range to current_price; buy well "
+        "below the range, sell well above it. Use only these numbers.\n\n"
+        f"value_range: {json.dumps(value_range)}\n")
+    KEYS = ("recommendation", "rationale", "summary")
+    val, vfields = orch.synthesize_fields(
+        instr + json.dumps(dossier, default=str), KEYS, task="reasoning", schema=VAL_SCHEMA,
+        max_tokens=1200, system="You are a valuation analyst. Decisive, brief.",
+        retry_prompt=instr + json.dumps({k: dossier[k] for k in ("current_price", "dcf_intrinsic", "scenarios")}, default=str),
+        retry_system="Valuation analyst. Output only the JSON object, all keys filled.")
+    has = bool(vfields and any(vfields.values()))
+    valuation = {"value_range": value_range,
+                 "recommendation": vfields.get("recommendation") if has else None,
+                 "rationale": vfields.get("rationale") if has else None}
+    rec = str((valuation.get("recommendation") or "n/a")).upper()
+    summary = (orch.text_field({"summary": vfields.get("summary")} if has else {}, "summary")
+               or (f"{t}: value range {_m(value_range['low'])}–{_m(value_range['high'])} vs price "
+                   f"{_m(price)} → {rec}." if value_range else
+                   f"{t}: dossier built; set a model route for the call."))
     out = {
         "system": "valuation", "ticker": t, "current_price": price,
         "dossier": dossier,
-        "valuation": {k: val.get(k) for k in ("value_range", "recommendation", "rationale")
-                      } if not val.get("_needs_model") else None,
+        "valuation": valuation,
         "model_route": val.get("_route", "none"),
         "summary": summary,
     }

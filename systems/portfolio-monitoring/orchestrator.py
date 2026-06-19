@@ -129,6 +129,16 @@ def main(args):
     tri = orch.synthesize(prompt, task="judgment", schema=TRIAGE_SCHEMA, max_tokens=1500,
                           system="You are a risk officer. Conservative, rules-first.")
     triage = tri.get("triage") or orch.first_list(tri)
+    if not tri.get("_needs_model") and not triage:
+        # tighter retry: just the tickers + which ones are in breach
+        breached = sorted({b["detail"].split(":")[0].split()[0] for b in breaches if b.get("detail")})
+        tri = orch.synthesize(
+            "Return key 'triage': an array of {ticker, status, note}. status is red if the "
+            "ticker is in `breached`, else green. One short note each. Also a 'summary'.\n"
+            f"tickers: {json.dumps(list(positions))}\nbreached: {json.dumps(breached)}",
+            task="judgment", schema=TRIAGE_SCHEMA, max_tokens=1000,
+            system="Risk officer. Output only the JSON object.")
+        triage = tri.get("triage") or orch.first_list(tri)
     summary = (orch.text_field(tri, "summary") if not tri.get("_needs_model")
                else f"Checked {len(positions)} positions; {len(breaches)} breach(es).")
 
