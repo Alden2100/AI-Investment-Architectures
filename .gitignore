@@ -1,0 +1,28 @@
+# --- regenerable "cake": rebuildable from sources + manifests, never committed ---
+data/
+.cache/
+*.db
+*.db-wal
+*.db-shm
+output/
+**/router_decisions.jsonl
+
+# materialized symlinks — regenerate with `python link.py` after a clone
+systems/*/.claude/skills/
+systems/*/.claude/agents/
+
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# os / editor
+.DS_Store
+*.swp
+
+# local Claude Code harness settings
+.claude/settings.local.json
