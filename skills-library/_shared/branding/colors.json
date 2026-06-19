@@ -1,7 +1,7 @@
 {
-  "brand": "Avenoth Advisory",
-  "description": "Refined institutional navy color system. One dominant color (Avenoth Navy), one supporting tone (Steel Blue), one sharp accent (Azure). 60/30/10 weighting.",
-  "version": "1.0.0",
+  "brand": "Tensh Consulting Group",
+  "description": "Refined institutional navy color system. One dominant color (Tensh Navy), one supporting tone (Steel Blue), one sharp accent (Azure). 60/30/10 weighting.",
+  "version": "1.1.0",
   "core": {
     "navy":      { "hex": "#0E2841", "rgb": [14, 40, 65],   "role": "primary",   "use": "Dominant brand color; headers, primary fills, body text on light." },
     "midnight":  { "hex": "#081A2E", "rgb": [8, 26, 46],    "role": "darkest",   "use": "Title slides, section dividers, deepest backgrounds." },
@@ -14,12 +14,16 @@
     "cloud":     { "hex": "#F5F7FA", "rgb": [245, 247, 250], "use": "Light page / content-slide background." },
     "mist":      { "hex": "#E4E9F0", "rgb": [228, 233, 240], "use": "Dividers, card fills, table rules." },
     "slate-gray":{ "hex": "#64748B", "rgb": [100, 116, 139], "use": "Captions, footnotes, muted text." },
-    "ink":       { "hex": "#0E2841", "rgb": [14, 40, 65],    "use": "Body text on light (same as Avenoth Navy)." }
+    "ink":       { "hex": "#0E2841", "rgb": [14, 40, 65],    "use": "Body text on light (same as Tensh Navy)." }
   },
   "semantic": {
     "positive":  { "hex": "#2F8F6B", "rgb": [47, 143, 107], "use": "Gains, up, pass, within-limit." },
     "negative":  { "hex": "#C24A3A", "rgb": [194, 74, 58],  "use": "Losses, down, breach." },
     "caution":   { "hex": "#C99A3C", "rgb": [201, 154, 60], "use": "Warnings, flags, watch-items." }
+  },
+  "typography": {
+    "serif": { "stack": "Georgia, 'Times New Roman', serif", "use": "Headings (--font-serif)." },
+    "sans":  { "stack": "Arial, Helvetica, sans-serif",       "use": "Body (--font-sans)." }
   },
   "usage": {
     "weighting": "60-70% navy, 20-30% steel, ~10% azure accent",

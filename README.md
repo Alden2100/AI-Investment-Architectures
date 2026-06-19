@@ -101,7 +101,7 @@ im() { ( cd "/path/to/AI Investment Architectures" && ./.venv/bin/python ask.py 
 ```
 
 ### Branded PDF output (only when you ask for it)
-Any system can emit a clean, slide-deck-ready **PDF** in the Avenoth Advisory brand —
+Any system can emit a clean, slide-deck-ready **PDF** in the Tensh Consulting Group brand —
 but **only when the prompt explicitly asks for one** (default output stays plain text):
 ```bash
 im "what's MSFT worth vs AAPL and GOOGL — export as a pdf"

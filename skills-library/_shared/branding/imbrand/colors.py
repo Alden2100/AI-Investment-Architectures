@@ -1,4 +1,4 @@
-"""Avenoth Advisory brand palette as reportlab colors.
+"""Tensh Consulting Group brand palette as reportlab colors.
 
 Loaded from the vendored ``branding/colors.json`` (single source of truth) with a
 hardcoded fallback, so the PDF theme always matches the brand. 60/30/10 weighting:
@@ -19,12 +19,13 @@ _FALLBACK = {
 }
 
 
-def _load_hex() -> dict:
+def _load() -> tuple:
     path = os.path.join(os.path.dirname(__file__), "..", "colors.json")
-    out = dict(_FALLBACK)
+    out, brand = dict(_FALLBACK), "Tensh Consulting Group"
     try:
         with open(path) as fh:
             data = json.load(fh)
+        brand = data.get("brand", brand)
         for group in ("core", "neutral", "semantic"):
             for name, spec in data.get(group, {}).items():
                 key = name.replace("-", "_")
@@ -34,10 +35,10 @@ def _load_hex() -> dict:
             out["slate"] = out["slate_gray"]
     except Exception:
         pass
-    return out
+    return out, brand
 
 
-_HEX = _load_hex()
+_HEX, _BRAND = _load()
 
 # reportlab Color objects
 NAVY = HexColor(_HEX["navy"])
@@ -54,7 +55,7 @@ POSITIVE = HexColor(_HEX["positive"])
 NEGATIVE = HexColor(_HEX["negative"])
 CAUTION = HexColor(_HEX["caution"])
 
-BRAND_NAME = "Avenoth Advisory"
+BRAND_NAME = _BRAND   # from colors.json ("Tensh Consulting Group")
 # reportlab built-ins that match the brand pairing cross-platform:
 # Times (serif) ≈ Georgia for headers; Helvetica ≈ Arial for body.
 FONT_SERIF = "Times-Roman"

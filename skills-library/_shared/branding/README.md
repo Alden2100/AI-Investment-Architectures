@@ -1,7 +1,7 @@
-# branding (`imbrand`) — Avenoth Advisory PDF theme
+# branding (`imbrand`) — Tensh Consulting Group PDF theme
 
 Produces clean, concise, **slide-deck-ready** PDFs from any system's output, in the
-Avenoth Advisory brand. Used **only when the user explicitly asks for a PDF** in the
+Tensh Consulting Group brand. Used **only when the user explicitly asks for a PDF** in the
 prompt (the front door, `ask.py`, decides) — default output stays plain text.
 
 ## Brand fidelity
@@ -29,4 +29,4 @@ Per-system layouts exist for all five full systems; scaffolds use a generic layo
 Engine: `imbrand/pdf.py` (reportlab); palette: `imbrand/colors.py`.
 
 > Vendored copy of the brand tokens; the upstream source of truth is the
-> `avenoth-brand` repo. Update `colors.json` here to re-sync.
+> `tensh-brand` repo. Update `colors.json` here to re-sync.
