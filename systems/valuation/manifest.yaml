@@ -1,0 +1,17 @@
+name: valuation
+description: >
+  Triangulate a company's value across a DCF, a peer comps table, and bull/base/bear
+  scenarios, then reconcile into a value range and a buy/hold/sell recommendation.
+version: 1.0.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: dcf-valuation,         version: 1.0.0}
+  - {name: comps-builder,         version: 1.0.0}
+  - {name: scenario-analyzer,     version: 1.0.0}
+  - {name: fundamentals-fetcher,  version: 1.0.0}
+  - {name: price-fetcher,         version: 1.0.0}
+
+agents:
+  - {name: valuation-analyst,     version: 1.0.0}

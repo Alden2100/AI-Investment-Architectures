@@ -1,0 +1,17 @@
+# valuation router policy.
+# Every number (DCF, comps, scenarios) is computed in Python by the skills. The model
+# does one thing: reconcile the three methods into a range + recommendation. That's
+# reasoning/judgment -> Claude (qwen fallback keeps it runnable keyless).
+default: claude
+allow_local_fallback: true
+allow_claude_fallback: true
+
+routes:
+  classification: local
+  extraction:     local
+  screening:      local
+  summarization:  local
+  reasoning:      claude        # triangulate DCF vs comps vs scenarios
+  synthesis:      claude
+  drafting:       claude
+  judgment:       claude
