@@ -1,0 +1,22 @@
+name: idea-sourcing
+description: >
+  Mandate -> ranked shortlist. Screens the universe, enriches each candidate with
+  fundamentals, catalysts, news, a DCF and peer multiples, then ranks into a
+  shortlist with a one-line thesis per name.
+version: 1.0.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+# Exactly which library pieces this system pins. `python link.py idea-sourcing`
+# materializes these as symlinks under .claude/skills and .claude/agents.
+skills:
+  - {name: universe-screener,    version: 1.0.0}
+  - {name: fundamentals-fetcher, version: 1.0.0}
+  - {name: catalyst-flagger,     version: 1.0.0}
+  - {name: news-fetcher,         version: 1.0.0}
+  - {name: dcf-valuation,        version: 1.0.0}
+  - {name: comps-builder,        version: 1.0.0}
+  - {name: web-search,           version: 1.0.0}
+
+agents:
+  - {name: screening-analyst,    version: 1.0.0}

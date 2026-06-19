@@ -1,0 +1,18 @@
+# idea-sourcing router policy (POLICY, not mechanism).
+# The engine in _shared/router is identical everywhere; this file is the only thing
+# that differs. Bulk/cheap work -> local qwen3.5:9b (free, on-box). The one judgment
+# that benefits from a strong model -> Claude (with qwen fallback when no API key,
+# so the system still runs end-to-end keyless).
+default: claude
+allow_local_fallback: true     # no ANTHROPIC_API_KEY -> use qwen instead of stalling
+allow_claude_fallback: true    # Ollama down -> use Claude instead of stalling
+
+routes:
+  classification: local        # catalyst-flagger event tagging
+  extraction:     local
+  screening:      local        # universe screening pre-filter
+  summarization:  local        # news / headline digestion
+  synthesis:      claude        # ranking the dossier into a shortlist (judgment)
+  reasoning:      claude
+  drafting:       claude
+  judgment:       claude
