@@ -38,8 +38,25 @@ if os.path.exists(_envf):
 # child orchestrator (it must pick its own system DB) — see _child_env().
 os.environ.setdefault("TOOLBOX_DB_PATH", os.path.join(CACHE, "ask.db"))
 os.environ.setdefault("TOOLBOX_CACHE_DIR", CACHE)
-for _p in ("data-fetch", "router", "web-search"):
+for _p in ("data-fetch", "router", "web-search", "branding"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
+
+# A PDF is produced ONLY when the user explicitly asks for one in the prompt
+# (or passes --pdf). Default output stays plain text in the terminal.
+_PDF_RE = re.compile(r"\b(pdf|\.pdf|as a pdf|export (?:it |this )?(?:as |to )?pdf|"
+                     r"pdf (?:report|version|format|export)|make (?:it |a )?pdf)\b", re.I)
+
+
+def wants_pdf(text: str) -> bool:
+    return bool(_PDF_RE.search(text or ""))
+
+
+def strip_pdf_phrase(text: str) -> str:
+    """Remove the PDF ask so it doesn't skew system/entity detection."""
+    t = re.sub(r"\b(and )?(also )?(please )?(export|save|give me|make|render|output|"
+               r"produce|create|generate)?\s*(it|this|that)?\s*(as|to|in|into)?\s*a?\s*"
+               r"\.?pdf( report| version| format| file| export)?\b", " ", text, flags=re.I)
+    return re.sub(r"\s+", " ", t).strip(" .,-")
 from imdata import universe, store          # noqa: E402
 from imrouter import route                   # noqa: E402
 
@@ -476,7 +493,16 @@ def render(system: str, d: dict) -> str:
     return "\n".join(L)
 
 
-def run_system(system: str, argv: list, show_json: bool) -> int:
+def _make_pdf(system: str, d: dict) -> str:
+    import time
+    from imbrand import build_report  # lazy: only imports reportlab when a PDF is asked
+    out_dir = os.path.join(HERE, "systems", system, "data", "output")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{system}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.pdf")
+    return build_report(system, d, path)
+
+
+def run_system(system: str, argv: list, show_json: bool, want_pdf: bool = False) -> int:
     import json
     orch = os.path.join(HERE, "systems", system, "orchestrator.py")
     # make sure symlinks exist
@@ -493,11 +519,18 @@ def run_system(system: str, argv: list, show_json: bool) -> int:
         print(proc.stdout.strip()[:2000] if not show_json else proc.stdout)
         return 0
     if show_json:
-        print(json.dumps(d, indent=2, default=str)); return 0
-    print("\n" + "=" * 70)
-    print(render(system, d))
-    if d.get("output_path"):
-        print(f"\n  full result: {d['output_path']}")
+        print(json.dumps(d, indent=2, default=str))
+    else:
+        print("\n" + "=" * 70)
+        print(render(system, d))
+        if d.get("output_path"):
+            print(f"\n  full result: {d['output_path']}")
+    if want_pdf:
+        try:
+            pdf_path = _make_pdf(system, d)
+            print(f"\n  📄 PDF: {pdf_path}")
+        except Exception as e:  # never let PDF failure kill the run
+            print(f"\n  (PDF generation failed: {e})", file=sys.stderr)
     return 0
 
 
@@ -509,6 +542,7 @@ def main():
                     help="plain-English request, or '<system> --flags'")
     ap.add_argument("-n", "--dry-run", action="store_true", help="show the plan, don't run")
     ap.add_argument("--json", action="store_true", help="print full JSON, not just the summary")
+    ap.add_argument("--pdf", action="store_true", help="also render a branded PDF")
     ap.add_argument("--system", default=None, help="force a system (skip intent detection)")
     args = ap.parse_args()
 
@@ -519,23 +553,27 @@ def main():
 
     # short form: first token is a system name -> pass the rest straight through
     if parts[0] in SYSTEMS and not args.system:
-        return run_system(parts[0], parts[1:], args.json)
+        return run_system(parts[0], parts[1:], args.json, want_pdf=args.pdf)
 
     text = " ".join(parts)
+    # PDF is produced ONLY if explicitly requested in the prompt (or via --pdf).
+    want_pdf = args.pdf or wants_pdf(text)
+    if want_pdf:
+        text = strip_pdf_phrase(text)  # don't let "as a pdf" skew intent detection
     _load_universe()
     if args.system:
         system, why = args.system, "forced"
     else:
         system, why = classify(text)
     argv, missing = build_argv(system, text)
-    print(f"→ system: {system}  ({why})")
+    print(f"→ system: {system}  ({why}){'   [+PDF]' if want_pdf else ''}")
     if missing:
         print(f"  need more: {missing}")
         return 2
     print(f"  running: {system} {' '.join(argv)}")
     if args.dry_run:
         return 0
-    return run_system(system, argv, args.json)
+    return run_system(system, argv, args.json, want_pdf=want_pdf)
 
 
 if __name__ == "__main__":

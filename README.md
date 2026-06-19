@@ -100,6 +100,18 @@ im() { ( cd "/path/to/AI Investment Architectures" && ./.venv/bin/python ask.py 
 # then:  im "is NVDA cheap vs AMD and AVGO?"
 ```
 
+### Branded PDF output (only when you ask for it)
+Any system can emit a clean, slide-deck-ready **PDF** in the Avenoth Advisory brand —
+but **only when the prompt explicitly asks for one** (default output stays plain text):
+```bash
+im "what's MSFT worth vs AAPL and GOOGL — export as a pdf"
+im "memo for Nvidia, as a pdf"
+im valuation --ticker MSFT --peers AAPL GOOGL --pdf      # short form
+```
+The PDF lands in `systems/<system>/data/output/`. Theme + palette live in
+[skills-library/_shared/branding/](skills-library/_shared/branding/) (engine:
+`imbrand`, colors from the vendored `colors.json`).
+
 ## How this maps to the field guide
 | Guide concept | Here |
 |---|---|

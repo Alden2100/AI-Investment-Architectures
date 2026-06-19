@@ -1,0 +1,31 @@
+{
+  "brand": "Avenoth Advisory",
+  "description": "Refined institutional navy color system. One dominant color (Avenoth Navy), one supporting tone (Steel Blue), one sharp accent (Azure). 60/30/10 weighting.",
+  "version": "1.0.0",
+  "core": {
+    "navy":      { "hex": "#0E2841", "rgb": [14, 40, 65],   "role": "primary",   "use": "Dominant brand color; headers, primary fills, body text on light." },
+    "midnight":  { "hex": "#081A2E", "rgb": [8, 26, 46],    "role": "darkest",   "use": "Title slides, section dividers, deepest backgrounds." },
+    "steel":     { "hex": "#2E5B8A", "rgb": [46, 91, 138],  "role": "secondary", "use": "Sub-headers, secondary fills, chart series." },
+    "azure":     { "hex": "#4E95D9", "rgb": [78, 149, 217], "role": "accent",    "use": "Highlights, links, key data, callouts (~10%, never a background)." },
+    "sky":       { "hex": "#9FC6EC", "rgb": [159, 198, 236],"role": "light-accent","use": "Accents on dark backgrounds, subtle highlights, secondary chart series." }
+  },
+  "neutral": {
+    "white":     { "hex": "#FFFFFF", "rgb": [255, 255, 255], "use": "Text on dark; light page base." },
+    "cloud":     { "hex": "#F5F7FA", "rgb": [245, 247, 250], "use": "Light page / content-slide background." },
+    "mist":      { "hex": "#E4E9F0", "rgb": [228, 233, 240], "use": "Dividers, card fills, table rules." },
+    "slate-gray":{ "hex": "#64748B", "rgb": [100, 116, 139], "use": "Captions, footnotes, muted text." },
+    "ink":       { "hex": "#0E2841", "rgb": [14, 40, 65],    "use": "Body text on light (same as Avenoth Navy)." }
+  },
+  "semantic": {
+    "positive":  { "hex": "#2F8F6B", "rgb": [47, 143, 107], "use": "Gains, up, pass, within-limit." },
+    "negative":  { "hex": "#C24A3A", "rgb": [194, 74, 58],  "use": "Losses, down, breach." },
+    "caution":   { "hex": "#C99A3C", "rgb": [201, 154, 60], "use": "Warnings, flags, watch-items." }
+  },
+  "usage": {
+    "weighting": "60-70% navy, 20-30% steel, ~10% azure accent",
+    "backgrounds": { "dark": ["#081A2E", "#0E2841"], "light": ["#F5F7FA", "#FFFFFF"] },
+    "text_on_dark": "#FFFFFF",
+    "text_on_light": "#0E2841",
+    "muted_text": "#64748B"
+  }
+}
