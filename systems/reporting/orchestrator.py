@@ -51,16 +51,27 @@ def build_memo(ticker):
         json.dump(inputs, fh, default=str)
     memo = skillkit.call_skill("memo-writer", ["--ticker", t, "--input-file", path])
     os.unlink(path)
-    sections = memo.get("memo_sections")
     route = "claude" if memo.get("_source") == "api" else (
         "local" if memo.get("_source") == "ollama" else "none")
-    summary = (memo.get("summary") if isinstance(memo.get("summary"), str)
-               else None) or f"IC memo drafted for {t}."
+    # Be robust to the local 9B model's schema looseness: memo-writer merges model
+    # fields into its result, so sections may arrive under `memo_sections`, flattened
+    # at top level, or as raw `text`. Recover the draft however it came back.
+    SECT = ["thesis", "business_overview", "financials", "valuation", "risks", "recommendation"]
+    sections = memo.get("memo_sections")
+    if not (isinstance(sections, dict) and sections):
+        flat = {k: memo[k] for k in SECT if isinstance(memo.get(k), str) and memo[k].strip()}
+        sections = flat or None
+    draft_text = memo.get("text") if not sections else None
+    needs = bool(memo.get("_needs_model")) or (not sections and not draft_text)
+    summary = (memo.get("summary") if isinstance(memo.get("summary"), str) and memo.get("summary").strip()
+               else None) or (f"IC memo dossier for {t} ready — set a model route."
+                              if needs else f"IC memo drafted for {t} via {route}.")
     return {
         "system": "reporting", "kind": "memo", "ticker": t,
         "inputs_used": list(inputs.keys()),
         "memo_sections": sections,
-        "needs_model": bool(memo.get("_needs_model")),
+        "draft_text": draft_text,
+        "needs_model": needs,
         "model_route": route,
         "summary": summary,
     }
@@ -73,12 +84,15 @@ def build_letter(args):
     letter = skillkit.call_skill("letter-drafter", largs)
     route = "claude" if letter.get("_source") == "api" else (
         "local" if letter.get("_source") == "ollama" else "none")
-    summary = (letter.get("summary") if isinstance(letter.get("summary"), str)
-               else None) or f"Investor letter drafted for {args.letter}."
+    draft = letter.get("letter_draft") or letter.get("text")
+    needs = bool(letter.get("_needs_model")) or not draft
+    summary = (letter.get("summary") if isinstance(letter.get("summary"), str) and letter.get("summary").strip()
+               else None) or (f"Letter dossier for {args.letter} ready — set a model route."
+                              if needs else f"Investor letter drafted for {args.letter} via {route}.")
     return {
         "system": "reporting", "kind": "letter", "period": args.letter,
-        "letter_draft": letter.get("letter_draft"),
-        "needs_model": bool(letter.get("_needs_model")),
+        "letter_draft": draft,
+        "needs_model": needs,
         "model_route": route,
         "summary": summary,
     }

@@ -13,12 +13,14 @@ def run():
     d = json.loads(proc.stdout)
     assert d["system"] == "reporting" and d["kind"] == "memo" and d["ticker"] == "MSFT"
     assert "dcf" in d["inputs_used"] and "comps" in d["inputs_used"]
-    # qwen route should produce sections; if no model at all, needs_model is acceptable
-    assert d.get("memo_sections") or d.get("needs_model"), "no memo and not flagged needs_model"
+    # Pipeline must produce a draft in some form (sections / raw text) or flag needs_model.
+    assert d.get("memo_sections") or d.get("draft_text") or d.get("needs_model"), \
+        "no memo draft and not flagged needs_model"
     assert d.get("summary")
     sec = d.get("memo_sections") or {}
-    print(f"PASS reporting(memo): MSFT inputs={d['inputs_used']} route={d.get('model_route')} "
-          f"sections={list(sec.keys()) if isinstance(sec, dict) else 'n/a'}")
+    drafted = "sections=" + str(list(sec.keys())) if isinstance(sec, dict) and sec else (
+        "raw_text" if d.get("draft_text") else "needs_model")
+    print(f"PASS reporting(memo): MSFT inputs={d['inputs_used']} route={d.get('model_route')} {drafted}")
     print(f"     summary: {str(d['summary'])[:120]}")
 
 
