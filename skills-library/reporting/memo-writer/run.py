@@ -1,0 +1,122 @@
+"""memo-writer: draft an investment-committee (IC) memo from research outputs. Hybrid model skill.
+
+run.py does deterministic prep (resolve ticker; if no input-file, pull a few basics
+to ground the memo) and builds the analysis request; the model writes the prose.
+No new numbers are computed by the model; figures come from the provided data.
+"""
+import argparse
+import json
+import os
+import sys
+
+# --- locate the shared library (_shared/) whether run from its canonical path,
+# --- a system's symlinked .claude/skills, or a standalone bundle -------------
+_here = os.path.realpath(__file__)
+_root = os.environ.get("IM_LIB_ROOT", "")
+if not _root:
+    _d = os.path.dirname(_here)
+    while _d != os.path.dirname(_d):
+        if os.path.isdir(os.path.join(_d, "_shared", "data-fetch")):
+            _root = _d
+            break
+        _d = os.path.dirname(_d)
+for _p in ("data-fetch", "router", "web-search"):
+    _cand = os.path.join(_root, "_shared", _p)
+    if os.path.isdir(_cand) and _cand not in sys.path:
+        sys.path.insert(0, _cand)
+
+from imdata import edgar, prices, skillkit, universe
+from imrouter import route as _route
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "memo_sections": {
+            "type": "object",
+            "properties": {
+                "thesis": {"type": "string"},
+                "business_overview": {"type": "string"},
+                "financials": {"type": "string"},
+                "valuation": {"type": "string"},
+                "risks": {"type": "string"},
+                "recommendation": {"type": "string"},
+            },
+            "required": ["thesis", "business_overview", "financials",
+                         "valuation", "risks", "recommendation"],
+        },
+        "summary": {"type": "string", "description": "One-paragraph IC-ready synopsis"},
+    },
+    "required": ["memo_sections", "summary"],
+}
+
+SYSTEM = (
+    "You are an experienced portfolio manager writing a concise investment-committee "
+    "memo. Use only the data provided; do not invent figures. Quote any number exactly "
+    "as it appears in the inputs. Write each section crisply and decisively, and make a "
+    "clear recommendation."
+)
+
+REVENUE_TAGS = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
+                "SalesRevenueNet"]
+
+
+def _annual(ticker, tags):
+    for tag in tags:
+        rows = [r for r in edgar.get_concept(ticker, tag)
+                if r["form"] == "10-K" and r["value"] is not None]
+        if rows:
+            return rows[0]["value"]
+    return None
+
+
+def main(args):
+    info = universe.resolve(args.ticker)
+
+    inputs = None
+    grounding = {}
+    if args.input_file:
+        with open(args.input_file) as f:
+            inputs = json.load(f)
+    else:
+        edgar.refresh_facts(info["ticker"])
+        rev = _annual(info["ticker"], REVENUE_TAGS)
+        ni = _annual(info["ticker"], ["NetIncomeLoss"])
+        px = prices.last_price(info["ticker"])
+        if rev is not None:
+            grounding["revenue"] = rev
+        if ni is not None:
+            grounding["net_income"] = ni
+        if px is not None:
+            grounding["price"] = round(px, 2)
+
+    if inputs is not None:
+        data_block = ("Prior research-skill outputs (JSON):\n"
+                      + json.dumps(inputs, indent=2, default=str))
+    else:
+        data_block = ("Grounding basics (latest annual figures and last price):\n"
+                      + json.dumps(grounding, indent=2, default=str))
+
+    prompt = (
+        f"Company: {info['title']} ({info['ticker']}).\n\n{data_block}\n\n"
+        "Draft an investment-committee memo. Fill every memo_sections field "
+        "(thesis, business_overview, financials, valuation, risks, recommendation) "
+        "and a one-paragraph summary. Cite the figures above where relevant, quoted "
+        "exactly. Do not introduce numbers not present in the data."
+    )
+
+    analysis = _route(prompt, task="drafting", system=SYSTEM, schema=SCHEMA, max_tokens=3000)
+    meta = {
+        "ticker": info["ticker"],
+        "company": info["title"],
+        "inputs_provided": inputs is not None,
+        "grounding": grounding,
+    }
+    return skillkit.model_output(analysis, meta)
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description="Draft an IC memo from research outputs.")
+    p.add_argument("--ticker", required=True)
+    p.add_argument("--input-file", default=None,
+                   help="JSON file of prior research-skill outputs (dcf, comps, etc.)")
+    skillkit.run(main, p)
