@@ -24,7 +24,7 @@ for _p in ("data-fetch", "router", "web-search"):
     if os.path.isdir(_cand) and _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from imdata import edgar, skillkit, store, universe
+from imdata import edgar, filing_rag, skillkit, store, universe
 from imrouter import route as _route
 
 SCHEMA = {
@@ -61,12 +61,23 @@ def main(args):
         if row is None:
             raise ValueError(f"No {args.form} found for {args.ticker}.")
 
-    text = edgar.filing_text(row["accession"])
-    clip = skillkit.excerpt(
-        text, max_chars=70000,
-        anchors=[r"item\s*1\b", r"risk factors", r"management.s discussion",
-                 r"results of operations", r"outlook|guidance"],
-    )
+    # Structure-aware retrieval: pull the relevant *parent sections* (Business,
+    # Risk Factors, MD&A, ...) intact rather than an anchor-truncated window that
+    # cuts across Items and tables. Falls back to anchor-excerpt if indexing yields
+    # nothing (e.g. a non-standard document).
+    res = filing_rag.retrieve(
+        row["accession"],
+        "business segments products growth drivers material risk factors "
+        "results of operations outlook guidance liquidity",
+        k=5)
+    if res["matches"]:
+        clip = "\n\n".join(f"[{m['item']} — {m.get('title') or ''}]\n{m['text'][:16000]}"
+                           for m in res["matches"])[:70000]
+    else:
+        clip = skillkit.excerpt(
+            edgar.filing_text(row["accession"]), max_chars=70000,
+            anchors=[r"item\s*1\b", r"risk factors", r"management.s discussion",
+                     r"results of operations", r"outlook|guidance"])
     prompt = (
         f"Company: {info['title']} ({info['ticker']}). Filing: {row['form']} "
         f"filed {row['filing_date']}.\n\nFiling text (excerpted):\n{clip}\n\n"

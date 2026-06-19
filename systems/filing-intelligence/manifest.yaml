@@ -9,6 +9,7 @@ router_policy: router-policy.yaml
 
 skills:
   - {name: filing-fetcher,          version: 1.0.0}
+  - {name: filing-retriever,        version: 1.0.0}
   - {name: filing-change-detector,  version: 1.0.0}
   - {name: filing-summarizer,       version: 1.0.0}
   - {name: earnings-call-summarizer, version: 1.0.0}
