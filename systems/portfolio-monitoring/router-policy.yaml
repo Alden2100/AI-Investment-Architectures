@@ -1,0 +1,17 @@
+# portfolio-monitoring router policy.
+# The numeric checks are pure Python (not in this file at all — they're code, the
+# "exact" half of the PDF split). The model is used ONLY to triage and narrate, which
+# is a judgment call -> Claude. Nothing here can flip a deterministic breach result.
+default: claude
+allow_local_fallback: true
+allow_claude_fallback: true
+
+routes:
+  classification: local
+  extraction:     local
+  screening:      local
+  summarization:  local
+  synthesis:      claude
+  reasoning:      claude
+  drafting:       claude
+  judgment:       claude        # green/yellow/red triage narrative

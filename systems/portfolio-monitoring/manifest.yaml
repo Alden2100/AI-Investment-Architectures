@@ -1,0 +1,20 @@
+name: portfolio-monitoring
+description: >
+  Positions + targets + thesis KPIs -> a status report with green/yellow/red triage
+  and breach alerts. All limit/KPI checks are deterministic and auditable; the model
+  only triages and narrates.
+version: 1.0.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: price-fetcher,         version: 1.0.0}
+  - {name: rebalance-checker,     version: 1.0.0}
+  - {name: risk-limit-checker,    version: 1.0.0}
+  - {name: correlation-analyzer,  version: 1.0.0}
+  - {name: kpi-tracker,           version: 1.0.0}
+  - {name: position-sizer,        version: 1.0.0}
+  - {name: audit-logger,          version: 1.0.0}
+
+agents:
+  - {name: portfolio-risk-monitor, version: 1.0.0}
