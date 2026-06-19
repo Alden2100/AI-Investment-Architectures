@@ -1,0 +1,15 @@
+name: governance-audit
+description: >
+  SCAFFOLD. Reads the immutable audit trail + saved theses/KPIs into a governance
+  view (who did what, which theses are live, which KPIs breached). Read is real;
+  narrative synthesis is stubbed.
+version: 0.1.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: audit-logger,    version: 1.0.0}
+  - {name: thesis-recorder, version: 1.0.0}
+  - {name: kpi-tracker,     version: 1.0.0}
+
+agents: []

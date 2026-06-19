@@ -1,0 +1,13 @@
+# Scaffold policy: firm default split. Cheap/bulk -> local qwen; judgment -> Claude.
+default: claude
+allow_local_fallback: true
+allow_claude_fallback: true
+routes:
+  classification: local
+  extraction: local
+  screening: local
+  summarization: local
+  reasoning: claude
+  synthesis: claude
+  drafting: claude
+  judgment: claude

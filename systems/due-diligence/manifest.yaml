@@ -1,0 +1,22 @@
+name: due-diligence
+description: >
+  SCAFFOLD. Deep single-name research dossier — fundamentals, moat, valuation, news,
+  and the filing read — assembled for a full due-diligence write-up. Gather is real;
+  final synthesis is stubbed.
+version: 0.1.0
+orchestrator: orchestrator.py
+router_policy: router-policy.yaml
+
+skills:
+  - {name: filing-summarizer,     version: 1.0.0}
+  - {name: moat-analyzer,         version: 1.0.0}
+  - {name: dcf-valuation,         version: 1.0.0}
+  - {name: comps-builder,         version: 1.0.0}
+  - {name: fundamentals-fetcher,  version: 1.0.0}
+  - {name: news-fetcher,          version: 1.0.0}
+  - {name: thesis-recorder,       version: 1.0.0}
+  - {name: web-search,            version: 1.0.0}
+
+agents:
+  - {name: filing-analyst,        version: 1.0.0}
+  - {name: valuation-analyst,     version: 1.0.0}
