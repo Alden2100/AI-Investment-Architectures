@@ -284,7 +284,11 @@ def _valuation(d):
              C.status_color(v.get("recommendation", "")),
              note=f"Value range {_money(vr.get('low'))} – {_money(vr.get('high'))}  "
                   f"vs price {_money(d.get('current_price'))}  ({_pct(dz.get('dcf_upside'))} to DCF)")
-    f = [Paragraph("Valuation Summary", H2), _two_col(
+    f = [Paragraph("Valuation Summary", H2)]
+    if not isinstance(dz.get("dcf_intrinsic"), (int, float)):
+        f.append(Paragraph("DCF not meaningful for this company (no clean free cash flow — "
+                           "common for banks/financials); valuation leans on comparables.", CAPTION))
+    f += [_two_col(
         kv([("Current price", cell(_money(d.get("current_price")), color=C.NAVY, bold=True)),
             ("DCF intrinsic", cell(f"{_money(dz.get('dcf_intrinsic'))} ({_pct(dz.get('dcf_upside'))})",
                                    color=_pct_color(dz.get("dcf_upside")))),
@@ -333,6 +337,11 @@ def _valuation(d):
         f.append(data_table(["Ticker", "Mkt Cap", "EV/EBITDA", "P/E", "P/S"], crows,
                             [1.5, 1.5, 1.4, 1.25, 1.25],
                             [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
+        ci = dz.get("comps_implied_detail")
+        if isinstance(ci, dict):
+            f.append(Paragraph(f"Peer-implied value for {d.get('ticker', '')}: "
+                               f"by P/E {_money(ci.get('by_pe'))} · by P/S {_money(ci.get('by_ps'))} · "
+                               f"average {_money(ci.get('average'))}", CAPTION))
 
     # Sensitivity grid
     sens = _sensitivity(dz.get("sensitivity"))
@@ -472,15 +481,31 @@ def _filing(d):
                            cell(_flat(m.get("new") or m.get("old") or ""), size=9.5)]
                           for m in mats[:8]], [1.5, 5.4])]
     mar = comp.get("margins") or {}
-    news = comp.get("external_context") or []
-    if mar or news:
-        f.append(Paragraph("Margins & Recent News", H2))
+    if mar or comp.get("quality") or comp.get("moat_type"):
+        f.append(Paragraph("Competitive Position", H2))
+        # Quantitative
         if mar:
-            f.append(kv([("Gross / Operating / Net margin",
-                          cell(f"{_mg(mar.get('gross'))} · {_mg(mar.get('operating'))} · {_mg(mar.get('net'))}"))],
-                        label_w=2.6, val_w=4.1))
-        if news:
-            f += _bullet_list([f"{n.get('title')}" for n in news], limit=5, size=9.5)
+            f.append(kv([("Margins (quant.)",
+                          cell(f"gross {_mg(mar.get('gross'))} · operating {_mg(mar.get('operating'))} · "
+                               f"net {_mg(mar.get('net'))}", color=C.NAVY, bold=True))],
+                        label_w=1.9, val_w=4.8))
+        # Qualitative
+        qual_rows = []
+        if comp.get("quality"):
+            qual_rows.append(("Quality (qual.)", cell(comp["quality"])))
+        if comp.get("moat_type"):
+            dur = f" — {_flat(comp.get('moat_durability'))}" if comp.get("moat_durability") else ""
+            qual_rows.append(("Moat", cell(f"{_flat(comp['moat_type'])}{dur}")))
+        if qual_rows:
+            f.append(kv(qual_rows, label_w=1.9, val_w=4.8))
+        if comp.get("moat_summary"):
+            f.append(Paragraph(_flat(comp["moat_summary"]), BODY))
+        if comp.get("moat_threats"):
+            f += [Paragraph("Threats to the moat:", CAPTION)] + _bullet_list(comp["moat_threats"], limit=4, size=9.5)
+    news = comp.get("external_context") or []
+    if news:
+        f.append(Paragraph("Recent News", H2))
+        f += _bullet_list([f"{n.get('title')}" for n in news], limit=5, size=9.5)
     return h, f
 
 

@@ -91,10 +91,36 @@ def change(ticker, form):
             "prior": c.get("old"), "current": c.get("new")}
 
 
+def _quality(margins):
+    """Deterministic QUALITATIVE read derived from the QUANTITATIVE margins — always
+    present even when the model's moat write-up is thin."""
+    nm, om, gm = margins.get("net"), margins.get("operating"), margins.get("gross")
+    if not isinstance(nm, (int, float)):
+        return None
+    tier = ("Exceptional" if nm >= 0.20 else "Strong" if nm >= 0.10
+            else "Moderate" if nm >= 0.03 else "Thin" if nm > 0 else "Unprofitable")
+    bits = [f"net margin {nm:.1%}"]
+    if isinstance(om, (int, float)):
+        bits.append(f"operating {om:.1%}")
+    if isinstance(gm, (int, float)):
+        bits.append(f"gross {gm:.1%}")
+    return f"{tier} profitability ({', '.join(bits)})"
+
+
 def competitive(ticker):
     m = skillkit.call_skill("moat-analyzer", ["--ticker", ticker])
     n = skillkit.call_skill("news-fetcher", ["--ticker", ticker, "--lookback", "30"])
-    return {"margins": m.get("margins", {}),
+    margins = m.get("margins", {}) or {}
+    # qualitative moat read from the model (best-effort; recover from loose qwen output)
+    moat = {} if m.get("_needs_model") else orch.recover(m, ("moat_type", "durability", "threats"))
+    moat_summary = m.get("summary") if isinstance(m.get("summary"), str) and m["summary"].strip() else (
+        m.get("text") if isinstance(m.get("text"), str) and len(m.get("text", "")) > 20 else None)
+    return {"margins": margins,
+            "quality": _quality(margins),            # deterministic qualitative tier
+            "moat_type": moat.get("moat_type"),
+            "moat_durability": moat.get("durability"),
+            "moat_threats": moat.get("threats"),
+            "moat_summary": moat_summary,
             "external_context": [{"title": i["title"], "date": i.get("date")}
                                  for i in n.get("items", [])[:5]]}
 

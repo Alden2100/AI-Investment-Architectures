@@ -433,6 +433,17 @@ def render(system: str, d: dict) -> str:
             add("\n  Key risks:"); L.extend("  • " + _line(x) for x in dg["risks"][:6])
         if dg.get("guidance"):
             add("\n  Guidance:"); add("  " + _line(dg["guidance"]))
+        comp = d.get("competitive") or {}
+        mar = comp.get("margins") or {}
+        if mar or comp.get("quality"):
+            add("\n  Competitive position:")
+            if mar:
+                add(f"    Quant — margins: gross {_pct(mar.get('gross'))} · op {_pct(mar.get('operating'))} · net {_pct(mar.get('net'))}")
+            if comp.get("quality"):
+                add(f"    Qual  — {comp['quality']}")
+            if comp.get("moat_type"):
+                add(f"    Moat  — {_line(comp.get('moat_type'))}" +
+                    (f" ({_line(comp.get('moat_durability'))})" if comp.get("moat_durability") else ""))
         if material:
             add("\n  Material changes:")
             for m in material[:10]:

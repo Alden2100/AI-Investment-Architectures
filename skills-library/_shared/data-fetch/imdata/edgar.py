@@ -37,38 +37,66 @@ def _sec_json(url: str, ttl: int, force: bool = False):
 # --------------------------------------------------------------------------- #
 # Filings list (submissions endpoint)
 # --------------------------------------------------------------------------- #
+_SUBMISSIONS_FILE_URL = "https://data.sec.gov/submissions/{name}"
+
+
+def _filing_rows(block: dict, info: dict) -> list:
+    """Turn a submissions filings block (parallel arrays) into filing rows."""
+    forms = block.get("form", [])
+    out = []
+    for i in range(len(forms)):
+        acc = block["accessionNumber"][i]
+        out.append({
+            "accession": acc,
+            "cik": info["cik"],
+            "ticker": info["ticker"],
+            "form": block["form"][i],
+            "filing_date": block["filingDate"][i],
+            "report_date": (block.get("reportDate") or [None] * len(forms))[i] or None,
+            "primary_doc": block["primaryDocument"][i],
+            "url": _ARCHIVE.format(cik=info["cik"], acc_nodash=acc.replace("-", ""),
+                                   doc=block["primaryDocument"][i]),
+        })
+    return out
+
+
 def refresh_filings(ticker: str, force: bool = False) -> int:
     """Pull the recent-filings index for a ticker into the store. Returns count."""
     info = universe.resolve(ticker)
-    data = _sec_json(
-        _SUBMISSIONS_URL.format(cik10=info["cik10"]),
-        ttl=config.TTL_SUBMISSIONS,
-        force=force,
-    )
-    recent = data.get("filings", {}).get("recent", {})
-    forms = recent.get("form", [])
-    rows = []
-    for i in range(len(forms)):
-        acc = recent["accessionNumber"][i]
-        acc_nodash = acc.replace("-", "")
-        primary_doc = recent["primaryDocument"][i]
-        rows.append(
-            {
-                "accession": acc,
-                "cik": info["cik"],
-                "ticker": info["ticker"],
-                "form": recent["form"][i],
-                "filing_date": recent["filingDate"][i],
-                "report_date": recent.get("reportDate", [None] * len(forms))[i] or None,
-                "primary_doc": primary_doc,
-                "url": _ARCHIVE.format(
-                    cik=info["cik"], acc_nodash=acc_nodash, doc=primary_doc
-                ),
-            }
-        )
+    data = _sec_json(_SUBMISSIONS_URL.format(cik10=info["cik10"]),
+                     ttl=config.TTL_SUBMISSIONS, force=force)
+    rows = _filing_rows(data.get("filings", {}).get("recent", {}), info)
     if rows:
         store.upsert_filings(rows)
     return len(rows)
+
+
+def ensure_form_history(ticker: str, form: str, min_count: int = 2, max_pages: int = 10) -> int:
+    """Make sure the store holds at least ``min_count`` filings of ``form``.
+
+    The submissions endpoint inlines only the most recent ~1000 filings; for prolific
+    filers (big banks file 8-Ks almost daily) last year's 10-K is paged out into
+    additional files. This fetches those pages oldest-needed-first, stopping as soon as
+    ``min_count`` of the form are present (so a 10-K comparison gets a prior year).
+    Returns how many of the form are in the store afterward.
+    """
+    info = universe.resolve(ticker)
+    have = len(store.list_filings(info["cik"], form=form))
+    if have >= min_count:
+        return have
+    data = _sec_json(_SUBMISSIONS_URL.format(cik10=info["cik10"]), ttl=config.TTL_SUBMISSIONS)
+    for f in (data.get("filings", {}).get("files", []) or [])[:max_pages]:
+        name = f.get("name")
+        if not name:
+            continue
+        try:
+            page = _sec_json(_SUBMISSIONS_FILE_URL.format(name=name), ttl=config.TTL_SUBMISSIONS)
+            store.upsert_filings(_filing_rows(page, info))
+        except Exception:
+            pass
+        if len(store.list_filings(info["cik"], form=form)) >= min_count:
+            break
+    return len(store.list_filings(info["cik"], form=form))
 
 
 def list_filings(
@@ -85,9 +113,12 @@ def list_filings(
     rows = store.list_filings(info["cik"], form=form, start=start, end=end, limit=limit)
     if not rows and refresh:
         refresh_filings(ticker)
-        rows = store.list_filings(
-            info["cik"], form=form, start=start, end=end, limit=limit
-        )
+        rows = store.list_filings(info["cik"], form=form, start=start, end=end, limit=limit)
+    # Prolific filers: the recent window can hold <2 of a given form (e.g. last year's
+    # 10-K paged out). Fetch older pages until two of the form exist.
+    if refresh and form and len(store.list_filings(info["cik"], form=form)) < 2:
+        ensure_form_history(ticker, form, min_count=2)
+        rows = store.list_filings(info["cik"], form=form, start=start, end=end, limit=limit)
     return rows
 
 
@@ -162,6 +193,17 @@ def refresh_facts(ticker: str, force: bool = False) -> int:
         ttl=config.TTL_COMPANYFACTS,
         force=force,
     )
+    def _num(v):
+        # Coerce to float so a malformed/huge XBRL int can't overflow SQLite's int64 bind.
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+    def _fy(v):
+        return v if isinstance(v, int) and -(1 << 31) < v < (1 << 31) else None
+
     rows = []
     for taxonomy, tags in data.get("facts", {}).items():
         for tag, body in tags.items():
@@ -173,12 +215,12 @@ def refresh_facts(ticker: str, force: bool = False) -> int:
                             "taxonomy": taxonomy,
                             "tag": tag,
                             "unit": unit,
-                            "fy": p.get("fy"),
+                            "fy": _fy(p.get("fy")),
                             "fp": p.get("fp"),
                             "form": p.get("form"),
                             "period_start": p.get("start"),
                             "period_end": p.get("end"),
-                            "value": p.get("val"),
+                            "value": _num(p.get("val")),
                             "accession": p.get("accn"),
                         }
                     )

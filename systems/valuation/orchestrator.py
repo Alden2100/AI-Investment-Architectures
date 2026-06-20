@@ -65,7 +65,12 @@ def main(args):
                                ["--ticker", t, "--items", "revenue", "net_income",
                                 "operating_income", "gross_profit"])
 
+    # Price independently of the DCF, so it's always present even when the DCF can't
+    # be built (e.g. banks/financials have no clean free cash flow).
     price = dcf.get("current_price")
+    if not isinstance(price, (int, float)):
+        px = skillkit.call_skill("price-fetcher", ["--ticker", t, "--lookback", "10", "--no-series"])
+        price = px.get("last")
     scenarios = scen.get("scenarios", {})
     fin = fund.get("financials", {})
     rev = fin.get("revenue")
@@ -75,7 +80,10 @@ def main(args):
                        ("net_income", "net")):
             if isinstance(fin.get(k), (int, float)):
                 margins[lbl] = round(fin[k] / rev, 4)
-    comps_implied = comps.get("target_implied_value")  # correct comps-builder key
+    # comps-builder returns implied value as {by_pe, by_ps, average} — take the average
+    _ci = comps.get("target_implied_value")
+    comps_implied = _ci.get("average") if isinstance(_ci, dict) else _ci
+    comps_implied_detail = _ci if isinstance(_ci, dict) else None
     dossier = {
         "ticker": t, "current_price": price,
         "dcf_intrinsic": dcf.get("intrinsic_value_per_share"),
@@ -85,6 +93,7 @@ def main(args):
         "equity_value": dcf.get("equity_value"),
         "comps_median": comps.get("median"),
         "comps_implied": comps_implied,
+        "comps_implied_detail": comps_implied_detail,
         "comps_table": comps.get("table", []),
         "scenarios": {k: scenarios.get(k, {}).get("intrinsic_value_per_share")
                       for k in ("bull", "base", "bear")},
