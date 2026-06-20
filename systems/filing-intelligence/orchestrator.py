@@ -107,6 +107,29 @@ def _quality(margins):
     return f"{tier} profitability ({', '.join(bits)})"
 
 
+_RED_FLAGS = [
+    ("going concern", "Going-concern doubt"),
+    ("material weakness", "Material weakness in internal controls"),
+    ("restatement", "Financial restatement"),
+    ("wells notice", "SEC Wells notice"),
+    ("subpoena", "Subpoena / government investigation"),
+    ("delisting", "Delisting risk"),
+    ("notice of default", "Debt default"),
+    ("auditor resigned", "Auditor resignation"),
+    ("ability to continue as a going concern", "Going-concern qualification"),
+]
+
+
+def _red_flags(text):
+    t = (text or "").lower()
+    seen, out = set(), []
+    for kw, label in _RED_FLAGS:
+        if kw in t and label not in seen:
+            seen.add(label)
+            out.append(label)
+    return out
+
+
 def competitive(ticker):
     m = skillkit.call_skill("moat-analyzer", ["--ticker", ticker])
     n = skillkit.call_skill("news-fetcher", ["--ticker", ticker, "--lookback", "30"])
@@ -132,11 +155,16 @@ def main(args):
                 "summary": f"No {args.form} found for {args.ticker.upper()}."}
     chg = change(args.ticker, args.form)
     comp = competitive(args.ticker)
-    # Structured read of the filing itself (business / drivers / risks / guidance),
-    # via the structure-aware retriever under the hood.
-    dig = skillkit.call_skill("filing-summarizer", ["--ticker", args.ticker, "--form", args.form])
-    digest = None if dig.get("_needs_model") else orch.recover(
-        dig, ("business", "drivers", "risks", "guidance"))
+    # Section map (structure-aware, deterministic, already cached from change detection)
+    section_map = []
+    try:
+        from imdata import filing_rag
+        section_map = [{"item": s["item"], "title": s["title"], "chars": len(s["text"])}
+                       for s in filing_rag.get_sections(meta["accession"])]
+    except Exception:
+        pass
+    # Deterministic RED FLAGS scan over the filing text (governance/credit triggers).
+    red_flags = _red_flags(excerpt or "")
 
     # Feed the model the HIGH-SIGNAL classified changes (compact), not the raw filing —
     # a tighter, higher-signal prompt is what the local 9B model handles best.
@@ -176,18 +204,62 @@ def main(args):
     summary = (f"{args.ticker.upper()} {args.form} ({meta['date']}): "
                f"{chg.get('raw_change_count')} raw diffs, {n_material} high/medium-significance "
                f"change(s). {tail}")
+    # ---------- Report Contract envelope ----------------------------------- #
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    mar = comp.get("margins") or {}
+    pg = lambda x: f"{x * 100:.1f}%" if isinstance(x, (int, float)) else "n/a"
+    why = orch.text_field({"w": (brief_fields or {}).get("why_it_matters")}, "w") if has_brief else ""
+    bluf = (f"{args.ticker.upper()}'s {args.form} (filed {meta['date']}) shows "
+            f"{chg.get('raw_change_count')} year-over-year text changes, {n_material} rated high/medium "
+            f"significance. " + (why[:300] if why else
+            ("No high/medium-significance changes flagged — disclosures look largely consistent YoY."
+             if not n_material else "See the material-changes exhibit for the substantive shifts.")))
+    if red_flags:
+        bluf += " RED FLAGS: " + "; ".join(red_flags) + "."
+    assumptions = [
+        {"param": "Comparison basis", "value": f"latest vs prior {args.form}", "why": "Year-over-year diff of same-form filings."},
+        {"param": "Change detection", "value": "paragraph diff + model significance", "why": "difflib paragraph diff; model labels high/medium/low."},
+        {"param": "Retrieval", "value": "structure-aware (Item-level)", "why": "Split on Items, tables kept intact, parent-document retrieval."},
+        {"param": "Significance filter", "value": "high + medium", "why": "Boilerplate/renumbering rated low and de-emphasised."},
+    ]
+    provenance = [
+        {"figure": "Filing text", "source": f"SEC EDGAR — accession {meta.get('accession')}", "as_of": meta.get("date")},
+        {"figure": "Year-over-year changes", "source": "filing-change-detector (difflib + model)", "as_of": meta.get("date")},
+        {"figure": "Margins", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": mar.get("period_end") or "latest annual"},
+        {"figure": "Recent news", "source": "Google News + SEC filing RSS", "as_of": today},
+    ]
+    commentary = [
+        {"skill": "filing-fetcher / filing-retriever", "note": f"Pulled the {args.form} and split it into {len(section_map)} Item-level sections (structure-aware, tables intact)."},
+        {"skill": "filing-change-detector", "note": f"Diffed vs the prior {args.form}: {chg.get('raw_change_count')} raw changes, {n_material} rated high/medium significance."},
+        {"skill": "moat-analyzer", "note": f"Computed margins (gross {pg(mar.get('gross'))}, net {pg(mar.get('net'))}); quality: {comp.get('quality') or 'n/a'}."},
+        {"skill": "news-fetcher", "note": f"Pulled {len(comp.get('external_context') or [])} recent headlines for external context."},
+    ]
+    risks = ["Free-data limitations: paragraph-level diff can surface wording tweaks; significance labels are model-assigned.",
+             "No XBRL-level financial-statement diff — figure-level changes are read from prose/MD&A."]
+    if red_flags:
+        risks = [f"Disclosed red flag: {fl}." for fl in red_flags] + risks
+    falsifiers = []
+    watch = orch.text_field({"w": (brief_fields or {}).get("what_to_watch")}, "w") if has_brief else ""
+    if watch:
+        falsifiers.append(f"Monitor next filing: {watch[:240]}")
+    falsifiers.append("Re-run on the next 10-Q/10-K; a new going-concern, restatement, or auditor change would invalidate the current read.")
+    report = orch.report(classification="Internal",
+                         as_of={"filing": meta.get("date"), "financials": mar.get("period_end") or "latest annual"},
+                         assumptions=assumptions, provenance=provenance, commentary=commentary,
+                         bluf=bluf, risks=risks, falsifiers=falsifiers)
+
     out = {
         "system": "filing-intelligence",
         "ticker": args.ticker.upper(), "form": args.form,
         "filing": meta, "change": chg, "competitive": comp,
-        "digest": digest,
+        "section_map": section_map, "red_flags": red_flags,
         "brief": brief_fields,
         "model_route": brief.get("_route", "none"),
+        "report": report,
         "summary": summary,
     }
     orch.audit("filing-intelligence", "analyze-filing", f"{args.ticker.upper()} {args.form}",
                f"{chg.get('raw_change_count')} changes; brief via {brief.get('_route', 'none')}")
-    out["output_path"] = orch.write_output("filing-intelligence", out)
     return out
 
 

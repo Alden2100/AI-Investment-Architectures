@@ -15,6 +15,31 @@ import sys
 import time
 
 
+def now_stamp() -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+
+
+def report(*, classification="Internal", as_of=None, assumptions=None, provenance=None,
+           commentary=None, bluf="", risks=None, falsifiers=None):
+    """Package the Universal Report Contract envelope the PDF renders.
+
+    Deterministic pieces (assumptions/provenance/commentary/as_of) make the report
+    defensible on a buy-side desk; bluf/risks/falsifiers carry the view. Every field
+    is optional and rendered only if present.
+    """
+    return {
+        "run_at": now_stamp(),
+        "classification": classification,
+        "as_of": as_of or {},
+        "assumptions": assumptions or [],     # [{param, value, why}]
+        "provenance": provenance or [],       # [{figure, source, as_of}]
+        "commentary": commentary or [],       # [{skill, note}]
+        "bluf": bluf or "",                   # executive summary (verdict, BLUF)
+        "risks": risks or [],                 # [str]
+        "falsifiers": falsifiers or [],       # [str] monitoring triggers
+    }
+
+
 def synthesize(prompt: str, *, task: str, system: str = "", schema=None,
                max_tokens: int = 3000) -> dict:
     """Run the orchestrator's final model step through the router.
@@ -107,11 +132,12 @@ def synthesize_fields(prompt, keys, *, task, schema, system="", max_tokens=2000,
 
 
 def write_output(name: str, obj: dict) -> str:
-    """Persist the latest result under the system's data/output dir; return its path.
-
-    Overwrites a single stable file per system (``<name>.json``) rather than piling up
-    a new timestamped file every run — the JSON is a regenerable record, not history.
-    """
+    """No-op by design: orchestrators stream their result as JSON on stdout (consumed
+    by the front door), and the only on-disk deliverable is a PDF — produced solely
+    when the user asks for one. We deliberately do NOT litter data/output with JSON.
+    Set IM_WRITE_JSON=1 to opt back into a single stable <name>.json for debugging."""
+    if os.environ.get("IM_WRITE_JSON") != "1":
+        return ""
     out_dir = os.path.join(os.environ.get("TOOLBOX_CACHE_DIR", "."), "output")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{name}.json")

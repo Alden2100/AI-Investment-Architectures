@@ -102,15 +102,32 @@ def main(args):
         "fundamentals": fin,
         "margins": margins,
     }
-    # --- deterministic value range: bracket the three methods --------------- #
-    pts = [x for x in (dossier["dcf_intrinsic"], scenarios.get("bear", {}).get("intrinsic_value_per_share"),
-                       scenarios.get("bull", {}).get("intrinsic_value_per_share"),
-                       comps_implied) if isinstance(x, (int, float))]
+    # Reconciliation (DCF vs comps vs price) — the analytical payoff
+    di, ci = dossier["dcf_intrinsic"], comps_implied
+    if isinstance(di, (int, float)) and isinstance(ci, (int, float)) and isinstance(price, (int, float)):
+        diverge = ("comps above DCF — the market prices in faster growth or higher terminal "
+                   "multiples than our base case" if ci > di else
+                   "DCF above comps — our cash-flow case is richer than peer multiples imply")
+        dossier["reconciliation"] = (f"DCF intrinsic {_m(di)} vs comps-implied {_m(ci)} vs price {_m(price)}; "
+                                     f"{diverge}.")
+    elif not isinstance(di, (int, float)) and isinstance(ci, (int, float)):
+        dossier["reconciliation"] = (f"DCF not meaningful for this company; comps-implied {_m(ci)} vs "
+                                     f"price {_m(price)} anchors the call.")
+    # --- deterministic value range -----------------------------------------
+    # Use the DCF/scenario spread (a single consistent method) so the range is tight
+    # and defensible; comps-implied is reported separately as a cross-check in the
+    # reconciliation, not folded into the band (it can be a wild outlier).
+    bear = scenarios.get("bear", {}).get("intrinsic_value_per_share")
+    bull = scenarios.get("bull", {}).get("intrinsic_value_per_share")
+    base = dossier["dcf_intrinsic"]
     value_range = None
-    if pts:
-        value_range = {"low": round(min(pts), 2), "high": round(max(pts), 2),
-                       "base": round(dossier["dcf_intrinsic"], 2)
-                       if isinstance(dossier["dcf_intrinsic"], (int, float)) else round(sorted(pts)[len(pts)//2], 2)}
+    if isinstance(bear, (int, float)) and isinstance(bull, (int, float)):
+        lo, hi = sorted((bear, bull))
+        b = base if isinstance(base, (int, float)) and lo <= base <= hi else round((lo + hi) / 2, 2)
+        value_range = {"low": round(lo, 2), "base": round(b, 2), "high": round(hi, 2)}
+    elif isinstance(comps_implied, (int, float)):   # financials: no DCF → comps band ±15%
+        value_range = {"low": round(comps_implied * 0.85, 2), "base": round(comps_implied, 2),
+                       "high": round(comps_implied * 1.15, 2)}
 
     instr = (
         "Give a buy/hold/sell call on this stock and explain it. Return keys "
@@ -133,11 +150,71 @@ def main(args):
                or (f"{t}: value range {_m(value_range['low'])}–{_m(value_range['high'])} vs price "
                    f"{_m(price)} → {rec}." if value_range else
                    f"{t}: dossier built; set a model route for the call."))
+    # ---------- Report Contract envelope (mostly deterministic) -------------- #
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    a = dossier["dcf_assumptions"] or {}
+    pf = lambda x: f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
+    pg = lambda x: f"{x * 100:.1f}%" if isinstance(x, (int, float)) else "n/a"
+    dcf_ok = isinstance(dossier["dcf_intrinsic"], (int, float))
+    if dcf_ok:
+        assumptions = [
+            {"param": "FCF growth (explicit)", "value": pg(a.get("growth")), "why": f"{a.get('years', 5)}-yr explicit horizon; base case."},
+            {"param": "Discount rate (WACC)", "value": pg(a.get("discount_rate")), "why": "Unlevered cost of capital."},
+            {"param": "Terminal growth", "value": pg(a.get("terminal_growth")), "why": "Gordon-growth perpetuity."},
+            {"param": "Base FCF", "value": _m(a.get("base_fcf")), "why": a.get("base_fcf_note", "reported OCF − capex")},
+            {"param": "Net debt", "value": _m(a.get("net_debt")), "why": "EV→equity bridge."},
+            {"param": "Shares out.", "value": f"{a.get('shares'):,.0f}" if isinstance(a.get("shares"), (int, float)) else "—", "why": "Per-share conversion."},
+        ]
+    else:
+        assumptions = [
+            {"param": "Method", "value": "Relative multiples (comps)", "why": "No clean free cash flow (financial) — DCF inapplicable."},
+            {"param": "Peer set", "value": ", ".join(p.upper() for p in (args.peers or [])) or "—", "why": "Comparable banks/financials."},
+            {"param": "Implied-value basis", "value": "median P/E & P/S × target metrics", "why": "Comps-implied fair value."},
+            {"param": "Value band", "value": "±15% around comps-implied", "why": "Uncertainty band on the multiple."},
+        ]
+    provenance = [
+        {"figure": "Current price", "source": "yfinance → Yahoo chart → Stooq (fallback chain)", "as_of": today},
+        {"figure": "DCF inputs (OCF, capex, debt, shares)", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": "latest annual filing"},
+        {"figure": "Comparable multiples", "source": "SEC EDGAR (XBRL) + market prices", "as_of": today},
+        {"figure": "Scenario / sensitivity grid", "source": "DCF model (deterministic, growth×WACC)", "as_of": "this run"},
+    ]
+    nteer = len(dossier.get("comps_table") or [])
+    med = dossier.get("comps_median") or {}
+    commentary = [
+        {"skill": "dcf-valuation", "note": (f"Unlevered-FCF DCF: base FCF {_m(a.get('base_fcf'))}, "
+            f"EV {_m(dossier.get('enterprise_value'))}, intrinsic {_m(dossier['dcf_intrinsic'])}/sh ({pf(dossier['dcf_upside'])} vs price)."
+            if dcf_ok else "DCF not meaningful — no clean free cash flow (typical for banks/financials); relied on comps.")},
+        {"skill": "comps-builder", "note": f"{nteer}-peer multiples table; median EV/EBITDA {med.get('ev_ebitda')}x, P/E {med.get('pe')}x; peer-implied value {_m(dossier.get('comps_implied'))}."},
+        {"skill": "scenario-analyzer", "note": "Bull/base/bear cases plus a growth×WACC sensitivity grid (see exhibit)."},
+        {"skill": "fundamentals-fetcher", "note": f"Profitability: gross {pg((dossier.get('margins') or {}).get('gross'))}, operating {pg((dossier.get('margins') or {}).get('operating'))}, net {pg((dossier.get('margins') or {}).get('net'))}."},
+    ]
+    vr = value_range or {}
+    if value_range and price:
+        loc = "above" if price > vr["high"] else "below" if price < vr["low"] else "within"
+        bluf = (f"We rate {t} {rec}. At {_m(price)}, {t} trades {loc} our fair-value range of "
+                f"{_m(vr['low'])}–{_m(vr['high'])} (base {_m(vr['base'])}; DCF {pf(dossier['dcf_upside'])}). "
+                + (orch.text_field({"r": valuation.get("rationale")}, "r")[:240] if valuation.get("rationale") else
+                   ("Bank/financial — DCF not applicable, so the call rests on relative multiples." if not dcf_ok else "")))
+    else:
+        bluf = summary
+    risks, falsifiers = [], []
+    if dcf_ok:
+        risks.append(f"Value is sensitive to the {pg(a.get('growth'))} FCF growth and {pg(a.get('discount_rate'))} WACC assumptions — a +2pt WACC or −2pt growth materially lowers it (see sensitivity grid).")
+        falsifiers.append(f"Revisit the call if realised FCF growth diverges from {pg(a.get('growth'))} by more than ~2pts, or if price exits the {_m(vr.get('low'))}–{_m(vr.get('high'))} band.")
+    else:
+        risks.append("DCF inapplicable (no clean free cash flow); the call rests on comps, which assume peer multiples persist — sector de-rating is the key downside.")
+        falsifiers.append("Revisit if the peer multiple set re-rates materially or the company's earnings trajectory breaks from peers.")
+    risks.append("Free-data limitations: a single fiscal-year base, no segment-level model, prices on a best-effort feed.")
+    report = orch.report(classification="Internal", as_of={"prices": today, "financials": "latest annual filing"},
+                         assumptions=assumptions, provenance=provenance, commentary=commentary,
+                         bluf=bluf, risks=risks, falsifiers=falsifiers)
+
     out = {
         "system": "valuation", "ticker": t, "current_price": price,
         "dossier": dossier,
         "valuation": valuation,
         "model_route": val.get("_route", "none"),
+        "report": report,
         "summary": summary,
     }
     orch.audit("valuation", "valuation", t,

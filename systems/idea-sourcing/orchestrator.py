@@ -166,6 +166,48 @@ def main(args):
         summary = orch.text_field(ranked, "summary") or (
             f"Ranked {len(shortlist)} name(s) via {ranked.get('_route')}: "
             f"{', '.join(s.get('ticker', '?') for s in shortlist)}.")
+    # ---------- Report Contract envelope ----------------------------------- #
+    import time as _t
+    today = _t.strftime("%Y-%m-%d", _t.gmtime())
+    mandate_bits = []
+    if args.sic_contains: mandate_bits.append(f"sector~'{args.sic_contains}'")
+    if args.name_contains: mandate_bits.append(f"name~'{args.name_contains}'")
+    if args.min_mcap: mandate_bits.append(f"mcap≥{args.min_mcap}")
+    if args.max_mcap: mandate_bits.append(f"mcap≤{args.max_mcap}")
+    if args.ticker_in: mandate_bits.append("explicit ticker set")
+    mandate = ", ".join(mandate_bits) or "unconstrained"
+    top = shortlist[0] if shortlist else {}
+    n_pursue = sum(1 for s in shortlist if (s.get("verdict") or "").lower() == "pursue")
+    bluf = (f"Mandate: {mandate}. Screened to {len(cands)} candidate(s); top pick "
+            f"{top.get('ticker', '—')} ({(top.get('verdict') or '').upper()}) — "
+            f"{orch.text_field({'t': top.get('thesis')}, 't')[:200]}. "
+            f"{n_pursue} name(s) rated PURSUE for full due diligence.")
+    funnel = [
+        {"param": "Mandate", "value": mandate, "why": "Universe definition (sector / size / tickers)."},
+        {"param": "Candidates surviving screen", "value": str(len(cands)), "why": "Names passing the mandate gates."},
+        {"param": "Enriched & scored", "value": str(len(shortlist)), "why": "Each given fundamentals, catalysts, DCF, comps."},
+        {"param": "Scoring weights", "value": "valuation + catalyst + mandate fit", "why": "Model ranks on cheapness (DCF/comps) and catalyst density."},
+    ]
+    provenance = [
+        {"figure": "Screen (sector/size)", "source": "SEC EDGAR company facts + SIC", "as_of": today},
+        {"figure": "Fundamentals", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": "latest annual"},
+        {"figure": "Catalysts", "source": "SEC 8-K filings + Google News RSS", "as_of": today},
+        {"figure": "DCF upside / comps", "source": "DCF model + SEC XBRL + market prices", "as_of": today},
+    ]
+    commentary = [
+        {"skill": "universe-screener", "note": f"Filtered the US universe to {len(cands)} name(s) for mandate: {mandate}."},
+        {"skill": "fundamentals-fetcher", "note": "Pulled revenue/income per name from XBRL."},
+        {"skill": "catalyst-flagger / news-fetcher", "note": "Scanned recent 8-Ks and headlines for event-driven catalysts."},
+        {"skill": "dcf-valuation / comps-builder", "note": f"Per-name DCF upside and peer multiples; peer median EV/EBITDA {(comps_median or {}).get('ev_ebitda')}x."},
+    ]
+    risks = ["DCF uses conservative house defaults (8% growth, 9% WACC); high-growth names screen as 'expensive' on this base.",
+             "Free-data limitations: single-year fundamentals, no liquidity/ADV screen, prices best-effort."]
+    falsifiers = [f"Advance {top.get('ticker', 'the top name')} to full due diligence; the thesis breaks if its catalyst fails to materialise or valuation re-rates to peers.",
+                  "Re-screen if the mandate (sector/size) changes."]
+    report = orch.report(classification="Internal", as_of={"prices": today, "financials": "latest annual"},
+                         assumptions=funnel, provenance=provenance, commentary=commentary,
+                         bluf=bluf, risks=risks, falsifiers=falsifiers)
+
     out = {
         "system": "idea-sourcing",
         "input": {k: v for k, v in vars(args).items() if v},
@@ -173,11 +215,11 @@ def main(args):
         "comps_median": comps_median,
         "shortlist": shortlist,
         "model_route": ranked.get("_route", "none"),
+        "report": report,
         "summary": summary,
     }
     orch.audit("idea-sourcing", "source", ",".join(c["ticker"] for c in cands),
                f"{len(cands)} candidates ranked via {ranked.get('_route', 'none')}")
-    out["output_path"] = orch.write_output("idea-sourcing", out)
     return out
 
 

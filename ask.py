@@ -565,8 +565,6 @@ def run_system(system: str, argv: list, show_json: bool, want_pdf: bool = False)
     else:
         print("\n" + "=" * 70)
         print(render(system, d))
-        if d.get("output_path"):
-            print(f"\n  full result: {d['output_path']}")
     if want_pdf:
         try:
             pdf_path = _make_pdf(system, d)

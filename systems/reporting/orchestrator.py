@@ -78,6 +78,39 @@ def build_memo(ticker):
     summary = (memo.get("summary") if isinstance(memo.get("summary"), str) and memo.get("summary").strip()
                else None) or (f"IC memo dossier for {t} ready — set a model route."
                               if needs else f"IC memo drafted for {t} via {route}.")
+    import time as _t
+    today = _t.strftime("%Y-%m-%d", _t.gmtime())
+    rec = (sections.get("recommendation") if isinstance(sections, dict) else "") or ""
+    med = inputs.get("comps_median") or {}
+    pf = lambda x: f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
+    money = lambda x: f"${float(x):,.2f}" if isinstance(x, (int, float)) else "n/a"
+    bluf = (f"IC recommendation for {t}: {_first_sentence(rec) or 'see recommendation'}. "
+            f"Price {money(inputs.get('price'))} vs DCF intrinsic {money(inputs.get('dcf_intrinsic_per_share'))} "
+            f"({pf(inputs.get('dcf_upside'))}); comps median EV/EBITDA {med.get('ev_ebitda')}x.")
+    assumptions = [
+        {"param": "Price", "value": money(inputs.get("price")), "why": "Latest close (best-effort feed)."},
+        {"param": "DCF intrinsic / upside", "value": f"{money(inputs.get('dcf_intrinsic_per_share'))} ({pf(inputs.get('dcf_upside'))})", "why": "House DCF (8% growth, 9% WACC defaults)."},
+        {"param": "Comps median (EV/EBITDA · P/E)", "value": f"{med.get('ev_ebitda')}x · {med.get('pe')}x", "why": "Peer-relative cross-check."},
+    ]
+    provenance = [
+        {"figure": "Price", "source": "yfinance → Yahoo → Stooq", "as_of": today},
+        {"figure": "DCF / fundamentals / margins", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": "latest annual"},
+        {"figure": "Comparable multiples", "source": "SEC EDGAR + market prices", "as_of": today},
+        {"figure": "Moat / competitive read", "source": "moat-analyzer (10-K + computed margins)", "as_of": "latest 10-K"},
+    ]
+    commentary = [
+        {"skill": "dcf-valuation", "note": f"Intrinsic {money(inputs.get('dcf_intrinsic_per_share'))}/sh ({pf(inputs.get('dcf_upside'))} vs price)."},
+        {"skill": "comps-builder", "note": f"Peer median EV/EBITDA {med.get('ev_ebitda')}x, P/E {med.get('pe')}x."},
+        {"skill": "moat-analyzer", "note": "Competitive position + margins fed into the memo."},
+        {"skill": "memo-writer", "note": f"Drafted the {len(sections) if isinstance(sections, dict) else 0}-section IC memo from the above (route: {route})."},
+    ]
+    risks = [_first_sentence(sections.get("risks")) if isinstance(sections, dict) and sections.get("risks") else
+             "See Risks section.", "Free-data limitations: single-year base, house DCF defaults, best-effort price."]
+    falsifiers = [f"Thesis breaks if {t}'s earnings/FCF trajectory diverges from the DCF base case, or if it re-rates to peer multiples.",
+                  "Re-run the memo on the next 10-K/10-Q."]
+    report = orch.report(classification="IC", as_of={"prices": today, "financials": "latest annual"},
+                         assumptions=assumptions, provenance=provenance, commentary=commentary,
+                         bluf=bluf, risks=[r for r in risks if r], falsifiers=falsifiers)
     return {
         "system": "reporting", "kind": "memo", "ticker": t,
         "inputs_used": inputs_used,
@@ -86,8 +119,19 @@ def build_memo(ticker):
         "draft_text": draft_text,
         "needs_model": needs,
         "model_route": route,
+        "report": report,
         "summary": summary,
     }
+
+
+def _first_sentence(s):
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    s = s.strip()
+    for sep in (". ", "; "):
+        if sep in s:
+            return s.split(sep)[0]
+    return s[:160]
 
 
 def build_letter(args):

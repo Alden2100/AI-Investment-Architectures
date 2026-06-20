@@ -156,6 +156,52 @@ def main(args):
             "status": (triage_by.get(tk, {}).get("status")),
         })
 
+    # ---------- Report Contract envelope ----------------------------------- #
+    today = time.strftime("%Y-%m-%d", time.gmtime())
+    by_status = {"red": 0, "yellow": 0, "green": 0}
+    for h in holdings:
+        s = (h.get("status") or "").lower()
+        if s in by_status:
+            by_status[s] += 1
+    action = ("Action required: " + "; ".join(b.get("detail", "") for b in breaches[:3])
+              if breaches else "No limit breaches — book is within all tolerances today.")
+    bluf = (f"{len(positions)} positions. Traffic light: {by_status['red']} red, "
+            f"{by_status['yellow']} yellow, {by_status['green']} green. "
+            f"{len(breaches)} limit breach(es); gross {ex_gross(risk)}, HHI {corr.get('herfindahl_index')}. {action}")
+    lim = risk.get("limits", {}) or {}
+    assumptions = [
+        {"param": "Max position weight", "value": str(args.max_weight), "why": "Single-name concentration cap."},
+        {"param": "Max gross exposure", "value": str(args.max_gross), "why": "Leverage / gross-book limit."},
+        {"param": "Max drawdown", "value": str(args.max_drawdown), "why": "Trailing peak-to-trough stop."},
+        {"param": "Drift tolerance", "value": "vs target weights", "why": "Rebalance trigger when a name drifts past target."},
+    ]
+    provenance = [
+        {"figure": "Prices / returns / vol / drawdown", "source": "yfinance → Yahoo → Stooq (fallback)", "as_of": today},
+        {"figure": "Exposure & limit checks", "source": "risk-limit-checker (deterministic)", "as_of": today},
+        {"figure": "Concentration (HHI) & correlation", "source": "correlation-analyzer (252-day window)", "as_of": today},
+        {"figure": "Thesis KPIs", "source": "kpi-tracker vs recorded baseline", "as_of": today},
+    ]
+    commentary = [
+        {"skill": "price-fetcher", "note": f"Pulled price/return/vol/drawdown for {len(positions)} name(s)."},
+        {"skill": "risk-limit-checker", "note": f"Checked weight/gross/net/drawdown vs limits → {len(breaches)} breach(es)."},
+        {"skill": "correlation-analyzer", "note": f"HHI {corr.get('herfindahl_index')}, avg pairwise corr {corr.get('avg_pairwise_correlation')}; {len(corr.get('concentration_flags', []))} concentration flag(s)."},
+        {"skill": "rebalance-checker", "note": (f"{len(trades)} rebalance trade(s) vs target weights." if trades else "No targets supplied — drift not assessed.")},
+        {"skill": "kpi-tracker / audit-logger", "note": f"Thesis KPIs checked; {len(breaches)} breach(es) logged to the audit trail."},
+    ]
+    risks = []
+    if (corr.get("herfindahl_index") or 0) > 0.25:
+        risks.append(f"Concentration: HHI {corr.get('herfindahl_index')} exceeds an equal-weight book — single-name risk is elevated.")
+    if (corr.get("avg_pairwise_correlation") or 0) > 0.5:
+        risks.append(f"Holdings are highly correlated (avg {corr.get('avg_pairwise_correlation')}) — diversification benefit is limited.")
+    risks.append("Free-data limitations: weights are as-supplied (not market-value-derived); vol/drawdown on a best-effort price feed.")
+    falsifiers = []
+    for b in breaches[:3]:
+        falsifiers.append(f"Resolve breach: {b.get('detail', '')} — trim to the limit or document an override.")
+    falsifiers.append("Re-run after any trade; a new thesis-KPI break flips a holding to red.")
+    report = orch.report(classification="Internal", as_of={"prices": today},
+                         assumptions=assumptions, provenance=provenance, commentary=commentary,
+                         bluf=bluf, risks=risks, falsifiers=falsifiers)
+
     out = {
         "system": "portfolio-monitoring",
         "positions": positions,
@@ -172,12 +218,16 @@ def main(args):
         "breaches": breaches,           # deterministic source of truth
         "triage": triage,               # model narration only
         "model_route": tri.get("_route", "none"),
+        "report": report,
         "summary": summary or f"{len(breaches)} breach(es) across {len(positions)} positions.",
     }
     for b in breaches:
         orch.audit("portfolio-monitoring", "breach", b.get("type", "?"), b.get("detail", ""))
-    out["output_path"] = orch.write_output("portfolio-monitoring", out)
     return out
+
+
+def ex_gross(risk):
+    return risk.get("gross_exposure")
 
 
 if __name__ == "__main__":

@@ -170,14 +170,14 @@ def _money(v):
     try:
         return f"${float(v):,.2f}"
     except (TypeError, ValueError):
-        return "n/a"
+        return "—"
 
 
 def _pct(v):
     try:
         return f"{float(v) * 100:+.1f}%"
     except (TypeError, ValueError):
-        return "n/a"
+        return "—"
 
 
 def _pct_color(v):
@@ -208,7 +208,7 @@ def _big(v):
     try:
         n = float(v)
     except (TypeError, ValueError):
-        return "n/a"
+        return "—"
     for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
         if abs(n) >= div:
             return f"${n / div:,.1f}{suf}"
@@ -219,14 +219,14 @@ def _x(v):
     try:
         return f"{float(v):.1f}x"
     except (TypeError, ValueError):
-        return "n/a"
+        return "—"
 
 
 def _mg(v):
     try:
         return f"{float(v) * 100:.1f}%"
     except (TypeError, ValueError):
-        return "n/a"
+        return "—"
 
 
 def _bullet_list(items, limit=8, size=10.5):
@@ -284,44 +284,53 @@ def _valuation(d):
              C.status_color(v.get("recommendation", "")),
              note=f"Value range {_money(vr.get('low'))} – {_money(vr.get('high'))}  "
                   f"vs price {_money(d.get('current_price'))}  ({_pct(dz.get('dcf_upside'))} to DCF)")
+    dcf_ok = isinstance(dz.get("dcf_intrinsic"), (int, float))
     f = [Paragraph("Valuation Summary", H2)]
-    if not isinstance(dz.get("dcf_intrinsic"), (int, float)):
+    if not dcf_ok:
         f.append(Paragraph("DCF not meaningful for this company (no clean free cash flow — "
-                           "common for banks/financials); valuation leans on comparables.", CAPTION))
-    f += [_two_col(
-        kv([("Current price", cell(_money(d.get("current_price")), color=C.NAVY, bold=True)),
-            ("DCF intrinsic", cell(f"{_money(dz.get('dcf_intrinsic'))} ({_pct(dz.get('dcf_upside'))})",
-                                   color=_pct_color(dz.get("dcf_upside")))),
-            ("Comps-implied", cell(_money(dz.get("comps_implied")))),
-            ], label_w=1.5, val_w=1.9),
-        kv([("Value range", cell(f"{_money(vr.get('low'))}–{_money(vr.get('high'))}", color=C.NAVY, bold=True)),
-            ("Enterprise value", cell(_big(dz.get("enterprise_value")))),
-            ("Equity value", cell(_big(dz.get("equity_value")))),
-            ], label_w=1.5, val_w=1.9))]
+                           "typical for banks/financials); the call rests on relative multiples.", CAPTION))
+    # Left column adapts to whether a DCF exists; right column is the value range.
+    left = [("Current price", cell(_money(d.get("current_price")), color=C.NAVY, bold=True))]
+    if dcf_ok:
+        left += [("DCF intrinsic", cell(f"{_money(dz.get('dcf_intrinsic'))} ({_pct(dz.get('dcf_upside'))})",
+                                        color=_pct_color(dz.get("dcf_upside"))))]
+    left += [("Comps-implied", cell(_money(dz.get("comps_implied"))))]
+    right = [("Value range", cell(f"{_money(vr.get('low'))}–{_money(vr.get('high'))}", color=C.NAVY, bold=True))]
+    if dcf_ok:
+        right += [("Enterprise value", cell(_big(dz.get("enterprise_value")))),
+                  ("Equity value", cell(_big(dz.get("equity_value"))))]
+    else:
+        right += [("Method", cell("Comparable multiples")),
+                  ("Net margin", cell(_mg(mar.get("net"))))]
+    f.append(_two_col(kv(left, label_w=1.5, val_w=1.9), kv(right, label_w=1.5, val_w=1.9)))
 
-    # Scenarios
-    f.append(Paragraph("Bull / Base / Bear", H2))
-    srows = []
-    for k in ("bull", "base", "bear"):
-        s = sd.get(k, {})
-        srows.append([cell(k.title(), color=C.NAVY, bold=True),
-                      cell(_money(s.get("intrinsic_value_per_share")), align=TA_RIGHT),
-                      cell(_pct(s.get("upside_vs_price")), color=_pct_color(s.get("upside_vs_price")), align=TA_RIGHT),
-                      cell(_mg(s.get("growth")), align=TA_RIGHT), cell(_mg(s.get("discount_rate")), align=TA_RIGHT)])
-    f.append(data_table(["Scenario", "Value/sh", "Upside", "Growth", "WACC"], srows,
-                        [1.7, 1.4, 1.3, 1.25, 1.25],
-                        [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
-
-    # DCF assumptions + margins side note
-    f.append(Paragraph("DCF Assumptions & Profitability", H2))
-    f.append(_two_col(
-        kv([("FCF growth", cell(_mg(a.get("growth")))), ("Discount rate (WACC)", cell(_mg(a.get("discount_rate")))),
-            ("Terminal growth", cell(_mg(a.get("terminal_growth")))), ("Base FCF", cell(_big(a.get("base_fcf")))),
-            ], label_w=1.7, val_w=1.7),
-        kv([("Gross margin", cell(_mg(mar.get("gross")))), ("Operating margin", cell(_mg(mar.get("operating")))),
-            ("Net margin", cell(_mg(mar.get("net")))),
-            ("Revenue", cell(_big((dz.get("fundamentals") or {}).get("revenue")))),
-            ], label_w=1.6, val_w=1.8)))
+    # Scenarios + DCF assumptions are DCF-only exhibits (skipped for financials)
+    if dcf_ok and any(sd.get(k) for k in ("bull", "base", "bear")):
+        f.append(Paragraph("Bull / Base / Bear", H2))
+        srows = []
+        for k in ("bull", "base", "bear"):
+            s = sd.get(k, {})
+            srows.append([cell(k.title(), color=C.NAVY, bold=True),
+                          cell(_money(s.get("intrinsic_value_per_share")), align=TA_RIGHT),
+                          cell(_pct(s.get("upside_vs_price")), color=_pct_color(s.get("upside_vs_price")), align=TA_RIGHT),
+                          cell(_mg(s.get("growth")), align=TA_RIGHT), cell(_mg(s.get("discount_rate")), align=TA_RIGHT)])
+        f.append(data_table(["Scenario", "Value/sh", "Upside", "Growth", "WACC"], srows,
+                            [1.7, 1.4, 1.3, 1.25, 1.25],
+                            [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
+        f.append(Paragraph("DCF Assumptions & Profitability", H2))
+        f.append(_two_col(
+            kv([("FCF growth", cell(_mg(a.get("growth")))), ("Discount rate (WACC)", cell(_mg(a.get("discount_rate")))),
+                ("Terminal growth", cell(_mg(a.get("terminal_growth")))), ("Base FCF", cell(_big(a.get("base_fcf")))),
+                ], label_w=1.7, val_w=1.7),
+            kv([("Gross margin", cell(_mg(mar.get("gross")))), ("Operating margin", cell(_mg(mar.get("operating")))),
+                ("Net margin", cell(_mg(mar.get("net")))),
+                ("Revenue", cell(_big((dz.get("fundamentals") or {}).get("revenue")))),
+                ], label_w=1.6, val_w=1.8)))
+    else:
+        f.append(Paragraph("Profitability", H2))
+        f.append(kv([("Gross / Operating / Net margin",
+                      cell(f"{_mg(mar.get('gross'))} · {_mg(mar.get('operating'))} · {_mg(mar.get('net'))}", color=C.NAVY, bold=True)),
+                     ("Revenue", cell(_big((dz.get("fundamentals") or {}).get("revenue"))))], label_w=2.6, val_w=4.0))
 
     # Comps peer table
     table = dz.get("comps_table") or []
@@ -348,6 +357,9 @@ def _valuation(d):
     if sens is not None:
         f += [Paragraph("Sensitivity — Value/Share by Growth × WACC", H2), sens]
 
+    if dz.get("reconciliation"):
+        f += [Paragraph("Reconciliation — DCF vs Comps vs Price", H2),
+              Paragraph(_flat(dz["reconciliation"]), BODY)]
     if v.get("rationale"):
         f += [Paragraph("Recommendation Rationale", H2), Paragraph(_flat(v["rationale"]), BODY)]
     return h, f
@@ -453,21 +465,15 @@ def _portfolio(d):
 
 def _filing(d):
     ch = d.get("change", {})
-    dg = d.get("digest") or {}
     comp = d.get("competitive", {})
     h = hero(f"{d.get('ticker', '')} {d.get('form', '')}", f"{ch.get('raw_change_count', 0)} changes",
-             C.NAVY, note=f"Filed {d.get('filing', {}).get('date', '')} · "
-                          f"{len(ch.get('material_changes') or [])} high/medium-significance")
+             C.NEGATIVE if d.get("red_flags") else C.NAVY,
+             note=f"Filed {d.get('filing', {}).get('date', '')} · "
+                  f"{len(ch.get('material_changes') or [])} high/medium-significance"
+                  + (f" · {len(d['red_flags'])} red flag(s)" if d.get("red_flags") else ""))
     f = []
-    if dg.get("business"):
-        f += [Paragraph("Business", H2), Paragraph(_flat(dg["business"]), BODY)]
-    if dg.get("drivers"):
-        f += [Paragraph("Growth Drivers", H2)] + _bullet_list(dg["drivers"], limit=6)
-    if dg.get("risks"):
-        f += [Paragraph("Key Risks", H2)] + _bullet_list(dg["risks"], limit=6)
-    if dg.get("guidance"):
-        f += [Paragraph("Guidance / Outlook", H2), Paragraph(_flat(dg["guidance"]), BODY)]
-
+    if d.get("red_flags"):
+        f += [Paragraph("Red Flags", H2)] + _bullet_list(d["red_flags"], limit=6)
     b = d.get("brief") or {}
     for key, label in (("what_changed", "What Changed YoY"), ("why_it_matters", "Why It Matters"),
                        ("what_to_watch", "What to Watch")):
@@ -506,6 +512,15 @@ def _filing(d):
     if news:
         f.append(Paragraph("Recent News", H2))
         f += _bullet_list([f"{n.get('title')}" for n in news], limit=5, size=9.5)
+    # Filing structure (what it says, by section) — exhibit
+    sm = [s for s in (d.get("section_map") or []) if s.get("item") not in ("COVER",)][:12]
+    if sm:
+        f += [Paragraph("Filing Structure (Items Analyzed)", H2),
+              data_table(["Item", "Section", "Size (chars)"],
+                         [[cell(s.get("item"), color=C.STEEL, bold=True),
+                           cell(s.get("title", "")[:48]),
+                           cell(f"{s.get('chars', 0):,}", align=TA_RIGHT)] for s in sm],
+                         [1.2, 4.2, 1.5], [TA_LEFT, TA_LEFT, TA_RIGHT])]
     return h, f
 
 
@@ -578,8 +593,107 @@ _TAGS = {
 }
 
 
+_ORCH = {
+    "idea-sourcing": "idea-sourcing-orchestrator", "filing-intelligence": "filing-analysis-orchestrator",
+    "portfolio-monitoring": "portfolio-monitoring-orchestrator", "valuation": "valuation-orchestrator",
+    "reporting": "reporting-orchestrator", "due-diligence": "due-diligence-orchestrator",
+    "governance-audit": "governance-audit-orchestrator",
+}
+_KIND = {  # report type label
+    "idea-sourcing": "Ranked Shortlist", "filing-intelligence": "Filing Intelligence Brief",
+    "portfolio-monitoring": "Portfolio Status Report", "valuation": "Valuation Report",
+    "reporting": "Investment Committee Memo", "due-diligence": "Due-Diligence Brief",
+    "governance-audit": "Governance & Audit Report",
+}
+
+
+def _cover_meta(system, data, rep):
+    subject = data.get("ticker") or data.get("period") or \
+        ", ".join(list((data.get("positions") or {}).keys())[:6]) or "—"
+    aod = rep.get("as_of") or {}
+    aod_str = " · ".join(f"{k} {v}" for k, v in aod.items() if v) or "see provenance"
+    meta = [
+        ["Report", cell(f"{_KIND.get(system, system)} — {_ORCH.get(system, system)}", color=C.NAVY, bold=True)],
+        ["Subject", cell(subject, color=C.NAVY, bold=True)],
+        ["Run", cell(rep.get("run_at", ""))],
+        ["Data as-of", cell(aod_str)],
+        ["Classification", cell((rep.get("classification") or "Internal").upper(), color=C.STEEL, bold=True)],
+    ]
+    t = Table([[cell(k, color=C.SLATE, bold=True, size=8.5), v] for k, v in meta],
+              colWidths=[1.4 * inch, 5.5 * inch])
+    t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                           ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                           ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    return [t, Spacer(1, 8)]
+
+
+def _bluf_box(rep, data):
+    text = rep.get("bluf") or _clean(data.get("summary"))
+    if not text:
+        return []
+    inner = [[cell("EXECUTIVE SUMMARY — BLUF", color=C.STEEL, bold=True, size=9.5)],
+             [Paragraph(text, ParagraphStyle("bluf", fontName=C.FONT_SANS, fontSize=10.5,
+                                              leading=15.5, textColor=C.INK))]]
+    t = Table(inner, colWidths=[6.9 * inch])
+    t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C.CLOUD),
+                           ("LINEBEFORE", (0, 0), (0, -1), 3, C.AZURE),
+                           ("LEFTPADDING", (0, 0), (-1, -1), 14), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                           ("TOPPADDING", (0, 0), (0, 0), 9), ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
+                           ("TOPPADDING", (0, 1), (-1, 1), 2)]))
+    return [t]
+
+
+def _clean(s):
+    return s.strip() if isinstance(s, str) and s.strip() and not s.lstrip().startswith(("{", "[")) else ""
+
+
+def _assumptions(rep):
+    rows = rep.get("assumptions") or []
+    if not rows:
+        return []
+    body = [[cell(r.get("param", ""), color=C.NAVY, bold=True), cell(r.get("value", "")),
+             cell(r.get("why", ""), size=9.3)] for r in rows]
+    return [Paragraph("Assumptions &amp; Methodology", H2),
+            data_table(["Parameter", "Value", "Rationale"], body, [1.9, 1.4, 3.6],
+                       [TA_LEFT, TA_LEFT, TA_LEFT])]
+
+
+def _provenance(rep):
+    rows = rep.get("provenance") or []
+    if not rows:
+        return []
+    body = [[cell(r.get("figure", ""), color=C.NAVY, bold=True), cell(r.get("source", ""), size=9.3),
+             cell(r.get("as_of", ""), align=TA_RIGHT)] for r in rows]
+    return [Paragraph("Data Lineage &amp; Provenance", H2),
+            data_table(["Figure", "Source", "As-of"], body, [1.9, 3.6, 1.4],
+                       [TA_LEFT, TA_LEFT, TA_RIGHT])]
+
+
+def _risks(rep):
+    risks, fals = rep.get("risks") or [], rep.get("falsifiers") or []
+    if not risks and not fals:
+        return []
+    out = [Paragraph("Risks, Limitations &amp; Falsifiers", H2)]
+    if risks:
+        out += _bullet_list(risks, limit=6)
+    if fals:
+        out += [Paragraph("Monitoring triggers — what would make us wrong:", CAPTION)]
+        out += _bullet_list(fals, limit=6, size=9.8)
+    return out
+
+
+def _commentary(rep):
+    rows = rep.get("commentary") or []
+    if not rows:
+        return []
+    out = [Paragraph("Analysis Performed", H2)]
+    for r in rows:
+        out.append(Paragraph(f"<b>{r.get('skill', '')}</b> — {_flat(r.get('note', ''))}", SMALL))
+    return out
+
+
 def build_report(system: str, data: dict, out_path: str, subject: str = None) -> str:
-    """Render a system's result to a branded, full-page PDF. Returns out_path."""
+    """Render a system's result to a branded PDF satisfying the Report Contract."""
     doc = BaseDocTemplate(out_path, pagesize=LETTER,
                           topMargin=1.05 * inch, bottomMargin=0.95 * inch,
                           leftMargin=0.8 * inch, rightMargin=0.8 * inch,
@@ -591,24 +705,35 @@ def build_report(system: str, data: dict, out_path: str, subject: str = None) ->
                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     doc.addPageTemplates([PageTemplate(id="main", frames=[frame], onPage=_decorate)])
 
+    rep = data.get("report") or {}
     story = [Spacer(1, 0.1 * inch)]
     story.append(Paragraph(_TITLES.get(system, lambda d: system.replace("-", " ").title())(data), TITLE))
-    sub = subject or data.get("summary") or ""
-    if isinstance(sub, str) and sub and not sub.lstrip().startswith(("{", "[")):
-        story.append(Paragraph(sub[:260], SUBTITLE))
-    else:
-        story.append(Spacer(1, 8))
+    story.append(Spacer(1, 4))
+    # 1.1 Cover / metadata
+    story += _cover_meta(system, data, rep)
+    # 1.2 Executive summary (BLUF)
+    story += _bluf_box(rep, data)
     story.append(hr())
 
+    # 1.3 Body + 1.4 exhibits (system-specific)
     hero_flow, body = _BUILDERS.get(system, _generic)(data)
     if hero_flow is not None:
         story += [hero_flow, Spacer(1, 6)]
     story += body
 
-    # push the method footnote to the bottom so the page reads full top-to-bottom
+    # 1.5 Assumptions & methodology
+    story += _assumptions(rep)
+    # 1.6 Data lineage & provenance
+    story += _provenance(rep)
+    # 1.7 Risks, limitations & falsifiers
+    story += _risks(rep)
+    # Analysis performed (skill/agent commentary)
+    story += _commentary(rep)
+
     route = data.get("model_route") or "n/a"
-    story += [Filler(), Spacer(1, 6),
-              Paragraph(f"Numbers computed deterministically from SEC EDGAR &amp; market "
-                        f"data; narrative via model route “{route}”.", CAPTION)]
+    story += [Spacer(1, 8),
+              Paragraph(f"All figures computed deterministically from SEC EDGAR (XBRL) &amp; "
+                        f"market data; qualitative narrative via model route “{route}”. "
+                        f"Free-data caveats apply — see limitations.", CAPTION)]
     doc.build(story)
     return out_path
