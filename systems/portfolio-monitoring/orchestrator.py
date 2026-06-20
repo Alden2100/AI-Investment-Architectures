@@ -142,13 +142,32 @@ def main(args):
     summary = (orch.text_field(tri, "summary") if not tri.get("_needs_model")
                else f"Checked {len(positions)} positions; {len(breaches)} breach(es).")
 
+    # Per-position holdings table: weight + price stats + drift + triage status, merged.
+    triage_by = {str(x.get("ticker", "")).upper(): x for x in (triage or []) if isinstance(x, dict)}
+    holdings = []
+    for tk, w in positions.items():
+        p = per.get(tk, {})
+        dr = drift.get(tk, {})
+        holdings.append({
+            "ticker": tk, "weight": float(w) if str(w).replace(".", "", 1).replace("-", "").isdigit() else w,
+            "last": p.get("last"), "return_1y": p.get("return_1y"),
+            "volatility": p.get("volatility"), "max_drawdown": p.get("max_drawdown"),
+            "target": dr.get("target"), "drift": dr.get("drift"),
+            "status": (triage_by.get(tk, {}).get("status")),
+        })
+
     out = {
         "system": "portfolio-monitoring",
-        "positions": positions, "per_position": per, "drift": drift, "trades": trades,
+        "positions": positions,
+        "holdings": holdings,
+        "per_position": per, "drift": drift, "trades": trades,
         "exposure": {"gross": risk.get("gross_exposure"), "net": risk.get("net_exposure"),
-                     "max_drawdown": risk.get("max_drawdown")},
+                     "max_drawdown": risk.get("max_drawdown"), "limits": risk.get("limits", {})},
         "correlation": {"herfindahl_index": corr.get("herfindahl_index"),
-                        "avg_pairwise_correlation": corr.get("avg_pairwise_correlation")},
+                        "avg_pairwise_correlation": corr.get("avg_pairwise_correlation"),
+                        "concentration_flags": corr.get("concentration_flags", []),
+                        "kept_tickers": corr.get("kept_tickers", []),
+                        "correlation_matrix": corr.get("correlation_matrix")},
         "thesis": thesis,
         "breaches": breaches,           # deterministic source of truth
         "triage": triage,               # model narration only

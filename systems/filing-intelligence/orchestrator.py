@@ -106,6 +106,11 @@ def main(args):
                 "summary": f"No {args.form} found for {args.ticker.upper()}."}
     chg = change(args.ticker, args.form)
     comp = competitive(args.ticker)
+    # Structured read of the filing itself (business / drivers / risks / guidance),
+    # via the structure-aware retriever under the hood.
+    dig = skillkit.call_skill("filing-summarizer", ["--ticker", args.ticker, "--form", args.form])
+    digest = None if dig.get("_needs_model") else orch.recover(
+        dig, ("business", "drivers", "risks", "guidance"))
 
     # Feed the model the HIGH-SIGNAL classified changes (compact), not the raw filing —
     # a tighter, higher-signal prompt is what the local 9B model handles best.
@@ -149,6 +154,7 @@ def main(args):
         "system": "filing-intelligence",
         "ticker": args.ticker.upper(), "form": args.form,
         "filing": meta, "change": chg, "competitive": comp,
+        "digest": digest,
         "brief": brief_fields,
         "model_route": brief.get("_route", "none"),
         "summary": summary,

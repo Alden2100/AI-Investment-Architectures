@@ -359,6 +359,16 @@ def render(system: str, d: dict) -> str:
         add(f"  Scenarios     : bear {_money(sc.get('bear'))} | base {_money(sc.get('base'))} | bull {_money(sc.get('bull'))}")
         if dz.get("comps_implied"):
             add(f"  Comps-implied : {_money(dz.get('comps_implied'))}")
+        if dz.get("comps_median"):
+            m = dz["comps_median"]
+            add(f"  Comps median  : EV/EBITDA {m.get('ev_ebitda')}x · P/E {m.get('pe')}x · P/S {m.get('ps')}x")
+        a = dz.get("dcf_assumptions") or {}
+        if a:
+            add(f"  DCF assumes   : {_pct(a.get('growth'))} growth · {_pct(a.get('discount_rate'))} WACC · "
+                f"{_pct(a.get('terminal_growth'))} terminal")
+        mg = dz.get("margins") or {}
+        if mg:
+            add(f"  Margins       : gross {_pct(mg.get('gross'))} · op {_pct(mg.get('operating'))} · net {_pct(mg.get('net'))}")
         v = d.get("valuation") or {}
         if v:
             vr = v.get("value_range", {}) or {}
@@ -389,6 +399,16 @@ def render(system: str, d: dict) -> str:
         co = d.get("correlation", {})
         add(f"  Exposure  : gross {ex.get('gross')}  net {ex.get('net')}  "
             f"HHI {co.get('herfindahl_index')}  avg-corr {co.get('avg_pairwise_correlation')}")
+        hold = d.get("holdings") or []
+        if hold:
+            add("  Holdings  :")
+            add(f"    {'TICKER':7} {'WGT':>6} {'LAST':>9} {'1Y':>8} {'VOL':>6} {'MAXDD':>7}  STATUS")
+            for p in hold:
+                w = _pct(p.get('weight')); ret = _pct(p.get('return_1y'))
+                vol = _pct(p.get('volatility')) if p.get('volatility') else 'n/a'
+                dd = _pct(p.get('max_drawdown')) if p.get('max_drawdown') else 'n/a'
+                add(f"    {p.get('ticker',''):7} {w:>6} {_money(p.get('last')):>9} {ret:>8} "
+                    f"{vol:>6} {dd:>7}  {(p.get('status') or '').upper()}")
         if breaches:
             add("  Breaches  :")
             L.extend("  " + b for b in _bullets(breaches))
@@ -404,6 +424,15 @@ def render(system: str, d: dict) -> str:
         material = ch.get("material_changes") or []
         add(f"FILING INTELLIGENCE — {d.get('ticker')} {d.get('form')}  ({f.get('date', 'n/a')})")
         add(f"  {ch.get('raw_change_count', 0)} raw diffs · {len(material)} high/medium-significance change(s)")
+        dg = d.get("digest") or {}
+        if dg.get("business"):
+            add("\n  Business:"); add("  " + _line(dg["business"]))
+        if dg.get("drivers"):
+            add("\n  Growth drivers:"); L.extend("  • " + _line(x) for x in dg["drivers"][:6])
+        if dg.get("risks"):
+            add("\n  Key risks:"); L.extend("  • " + _line(x) for x in dg["risks"][:6])
+        if dg.get("guidance"):
+            add("\n  Guidance:"); add("  " + _line(dg["guidance"]))
         if material:
             add("\n  Material changes:")
             for m in material[:10]:
@@ -497,12 +526,11 @@ def render(system: str, d: dict) -> str:
 
 
 def _make_pdf(system: str, d: dict) -> str:
-    import time
     from imbrand import build_report  # lazy: only imports reportlab when a PDF is asked
     out_dir = os.path.join(HERE, "systems", system, "data", "output")
     os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, f"{system}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.pdf")
-    return build_report(system, d, path)
+    # overwrite one stable PDF per system (copy it out when you want to keep a version)
+    return build_report(system, d, os.path.join(out_dir, f"{system}.pdf"))
 
 
 def run_system(system: str, argv: list, show_json: bool, want_pdf: bool = False) -> int:

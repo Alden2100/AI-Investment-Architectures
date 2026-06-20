@@ -62,24 +62,41 @@ def main(args):
     comps = skillkit.call_skill("comps-builder", ["--tickers", *peers, "--target", t])
     scen = skillkit.call_skill("scenario-analyzer", ["--ticker", t])
     fund = skillkit.call_skill("fundamentals-fetcher",
-                               ["--ticker", t, "--items", "revenue", "net_income"])
+                               ["--ticker", t, "--items", "revenue", "net_income",
+                                "operating_income", "gross_profit"])
 
     price = dcf.get("current_price")
     scenarios = scen.get("scenarios", {})
+    fin = fund.get("financials", {})
+    rev = fin.get("revenue")
+    margins = {}
+    if isinstance(rev, (int, float)) and rev:
+        for k, lbl in (("gross_profit", "gross"), ("operating_income", "operating"),
+                       ("net_income", "net")):
+            if isinstance(fin.get(k), (int, float)):
+                margins[lbl] = round(fin[k] / rev, 4)
+    comps_implied = comps.get("target_implied_value")  # correct comps-builder key
     dossier = {
         "ticker": t, "current_price": price,
         "dcf_intrinsic": dcf.get("intrinsic_value_per_share"),
         "dcf_upside": dcf.get("upside_vs_price"),
+        "dcf_assumptions": dcf.get("assumptions", {}),
+        "enterprise_value": dcf.get("enterprise_value"),
+        "equity_value": dcf.get("equity_value"),
         "comps_median": comps.get("median"),
-        "comps_implied": comps.get("target_value") or comps.get("implied_value"),
+        "comps_implied": comps_implied,
+        "comps_table": comps.get("table", []),
         "scenarios": {k: scenarios.get(k, {}).get("intrinsic_value_per_share")
                       for k in ("bull", "base", "bear")},
-        "fundamentals": fund.get("financials", {}),
+        "scenario_detail": scenarios,
+        "sensitivity": scen.get("sensitivity_table"),
+        "fundamentals": fin,
+        "margins": margins,
     }
     # --- deterministic value range: bracket the three methods --------------- #
     pts = [x for x in (dossier["dcf_intrinsic"], scenarios.get("bear", {}).get("intrinsic_value_per_share"),
                        scenarios.get("bull", {}).get("intrinsic_value_per_share"),
-                       dossier["comps_implied"]) if isinstance(x, (int, float))]
+                       comps_implied) if isinstance(x, (int, float))]
     value_range = None
     if pts:
         value_range = {"low": round(min(pts), 2), "high": round(max(pts), 2),

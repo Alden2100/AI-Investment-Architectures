@@ -40,6 +40,10 @@ LEAD = ParagraphStyle("lead", fontName=C.FONT_SERIF, fontSize=13, leading=19,
                       textColor=C.NAVY, spaceAfter=10)
 
 
+def _hexc(c):
+    return "#%02X%02X%02X" % (int(c.red * 255), int(c.green * 255), int(c.blue * 255))
+
+
 def cell(text, *, color=C.INK, bold=False, size=10, align=TA_LEFT):
     st = ParagraphStyle("c", fontName=C.FONT_SANS_BOLD if bold else C.FONT_SANS,
                         fontSize=size, leading=size + 3.5, textColor=color, alignment=align)
@@ -199,37 +203,151 @@ def _flat(v):
     return str(v)
 
 
+def _big(v):
+    """Compact large-dollar formatting: 2.82e12 -> $2.82T, 5.3e9 -> $5.3B."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(n) >= div:
+            return f"${n / div:,.1f}{suf}"
+    return f"${n:,.0f}"
+
+
+def _x(v):
+    try:
+        return f"{float(v):.1f}x"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _mg(v):
+    try:
+        return f"{float(v) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _bullet_list(items, limit=8, size=10.5):
+    st = ParagraphStyle("bl", fontName=C.FONT_SANS, fontSize=size, leading=size + 4.5,
+                        textColor=C.INK, leftIndent=10, spaceAfter=3,
+                        bulletIndent=0, bulletFontName=C.FONT_SANS_BOLD, bulletColor=C.AZURE)
+    out = []
+    for it in (items or [])[:limit]:
+        s = _flat(it)
+        if s:
+            out.append(Paragraph(s, st, bulletText="▪"))
+    return out
+
+
+def _sensitivity(st):
+    """growth × discount-rate sensitivity grid -> branded table."""
+    if not isinstance(st, dict) or not st.get("matrix"):
+        return None
+    rows, cols, mat = st.get("rows", []), st.get("cols", []), st["matrix"]
+    header = [f"{st.get('row_label', 'g')} \\ {st.get('col_label', 'r')}"] + [_mg(c) for c in cols]
+    body = []
+    for i, rlab in enumerate(rows):
+        cells = [cell(_mg(rlab), color=C.STEEL, bold=True)]
+        for j in range(len(cols)):
+            val = mat[i][j] if i < len(mat) and j < len(mat[i]) else None
+            cells.append(cell(_money(val), align=TA_RIGHT))
+        body.append(cells)
+    n = len(cols) + 1
+    return data_table(header, body, [1.5] + [(6.9 - 1.5) / (n - 1)] * (n - 1),
+                      [TA_LEFT] + [TA_RIGHT] * (n - 1))
+
+
 # --------------------------------------------------------------------------- #
 # Per-system content  ->  (hero_flowable_or_None, [body flowables])
 # --------------------------------------------------------------------------- #
+def _two_col(left, right):
+    """Place two flowables side by side (e.g. two kv blocks)."""
+    t = Table([[left, right]], colWidths=[3.45 * inch, 3.45 * inch])
+    t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                           ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                           ("RIGHTPADDING", (0, 0), (0, 0), 16)]))
+    return t
+
+
 def _valuation(d):
-    dz, sc = d.get("dossier", {}), d.get("dossier", {}).get("scenarios", {})
+    dz = d.get("dossier", {})
+    sc, sd = dz.get("scenarios", {}), dz.get("scenario_detail", {})
+    a = dz.get("dcf_assumptions", {})
+    med = dz.get("comps_median", {}) or {}
+    mar = dz.get("margins", {})
     v = d.get("valuation") or {}
     vr = v.get("value_range") or {}
     rec = str(v.get("recommendation", "n/a")).upper()
-    h = hero("Recommendation",
-             f"{rec} · {d.get('ticker', '')}",
+    h = hero("Recommendation", f"{rec} · {d.get('ticker', '')}",
              C.status_color(v.get("recommendation", "")),
              note=f"Value range {_money(vr.get('low'))} – {_money(vr.get('high'))}  "
-                  f"vs price {_money(d.get('current_price'))}")
-    f = [Paragraph("Valuation Snapshot", H2), kv([
-        ("Current price", cell(_money(d.get("current_price")), color=C.NAVY, bold=True)),
-        ("DCF intrinsic", cell(f"{_money(dz.get('dcf_intrinsic'))}   ({_pct(dz.get('dcf_upside'))})",
-                               color=_pct_color(dz.get("dcf_upside")))),
-        ("Scenario range", cell(f"bear {_money(sc.get('bear'))}   ·   base {_money(sc.get('base'))}"
-                                f"   ·   bull {_money(sc.get('bull'))}")),
-        ("Comps-implied", cell(_money(dz.get("comps_implied")))),
-        ("Value range", cell(f"{_money(vr.get('low'))} – {_money(vr.get('high'))}  "
-                             f"(base {_money(vr.get('base'))})", color=C.NAVY, bold=True)),
-    ])]
+                  f"vs price {_money(d.get('current_price'))}  ({_pct(dz.get('dcf_upside'))} to DCF)")
+    f = [Paragraph("Valuation Summary", H2), _two_col(
+        kv([("Current price", cell(_money(d.get("current_price")), color=C.NAVY, bold=True)),
+            ("DCF intrinsic", cell(f"{_money(dz.get('dcf_intrinsic'))} ({_pct(dz.get('dcf_upside'))})",
+                                   color=_pct_color(dz.get("dcf_upside")))),
+            ("Comps-implied", cell(_money(dz.get("comps_implied")))),
+            ], label_w=1.5, val_w=1.9),
+        kv([("Value range", cell(f"{_money(vr.get('low'))}–{_money(vr.get('high'))}", color=C.NAVY, bold=True)),
+            ("Enterprise value", cell(_big(dz.get("enterprise_value")))),
+            ("Equity value", cell(_big(dz.get("equity_value")))),
+            ], label_w=1.5, val_w=1.9))]
+
+    # Scenarios
+    f.append(Paragraph("Bull / Base / Bear", H2))
+    srows = []
+    for k in ("bull", "base", "bear"):
+        s = sd.get(k, {})
+        srows.append([cell(k.title(), color=C.NAVY, bold=True),
+                      cell(_money(s.get("intrinsic_value_per_share")), align=TA_RIGHT),
+                      cell(_pct(s.get("upside_vs_price")), color=_pct_color(s.get("upside_vs_price")), align=TA_RIGHT),
+                      cell(_mg(s.get("growth")), align=TA_RIGHT), cell(_mg(s.get("discount_rate")), align=TA_RIGHT)])
+    f.append(data_table(["Scenario", "Value/sh", "Upside", "Growth", "WACC"], srows,
+                        [1.7, 1.4, 1.3, 1.25, 1.25],
+                        [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
+
+    # DCF assumptions + margins side note
+    f.append(Paragraph("DCF Assumptions & Profitability", H2))
+    f.append(_two_col(
+        kv([("FCF growth", cell(_mg(a.get("growth")))), ("Discount rate (WACC)", cell(_mg(a.get("discount_rate")))),
+            ("Terminal growth", cell(_mg(a.get("terminal_growth")))), ("Base FCF", cell(_big(a.get("base_fcf")))),
+            ], label_w=1.7, val_w=1.7),
+        kv([("Gross margin", cell(_mg(mar.get("gross")))), ("Operating margin", cell(_mg(mar.get("operating")))),
+            ("Net margin", cell(_mg(mar.get("net")))),
+            ("Revenue", cell(_big((dz.get("fundamentals") or {}).get("revenue")))),
+            ], label_w=1.6, val_w=1.8)))
+
+    # Comps peer table
+    table = dz.get("comps_table") or []
+    if table:
+        f.append(Paragraph("Comparable Companies", H2))
+        crows = [[cell(r.get("ticker"), color=C.NAVY, bold=True), cell(_big(r.get("market_cap")), align=TA_RIGHT),
+                  cell(_x(r.get("ev_ebitda")), align=TA_RIGHT), cell(_x(r.get("pe")), align=TA_RIGHT),
+                  cell(_x(r.get("ps")), align=TA_RIGHT)] for r in table]
+        crows.append([cell("Median", color=C.STEEL, bold=True), cell("", align=TA_RIGHT),
+                      cell(_x(med.get("ev_ebitda")), color=C.STEEL, bold=True, align=TA_RIGHT),
+                      cell(_x(med.get("pe")), color=C.STEEL, bold=True, align=TA_RIGHT),
+                      cell(_x(med.get("ps")), color=C.STEEL, bold=True, align=TA_RIGHT)])
+        f.append(data_table(["Ticker", "Mkt Cap", "EV/EBITDA", "P/E", "P/S"], crows,
+                            [1.5, 1.5, 1.4, 1.25, 1.25],
+                            [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
+
+    # Sensitivity grid
+    sens = _sensitivity(dz.get("sensitivity"))
+    if sens is not None:
+        f += [Paragraph("Sensitivity — Value/Share by Growth × WACC", H2), sens]
+
     if v.get("rationale"):
-        f += [Paragraph("Rationale", H2), Paragraph(_flat(v["rationale"]), BODY)]
+        f += [Paragraph("Recommendation Rationale", H2), Paragraph(_flat(v["rationale"]), BODY)]
     return h, f
 
 
 def _idea(d):
     rows = d.get("shortlist") or d.get("candidates") or []
     top = rows[0] if rows else {}
+    med = d.get("comps_median", {}) or {}
     h = hero("Top Idea", f"{top.get('ticker', '—')} · {(top.get('verdict') or '').upper()}",
              C.status_color(top.get("verdict", "")),
              note=_flat(top.get("thesis", "")) if top.get("thesis") else None)
@@ -239,61 +357,130 @@ def _idea(d):
             cell(r.get("rank", "•"), bold=True),
             cell(r.get("ticker", "?"), color=C.NAVY, bold=True),
             cell((r.get("verdict") or "—").upper(), color=C.status_color(r.get("verdict", "")), bold=True),
+            cell(_big(r.get("market_cap")), align=TA_RIGHT),
             cell(_pct(r.get("dcf_upside")), color=_pct_color(r.get("dcf_upside")), align=TA_RIGHT),
-            cell(_flat(r.get("thesis", "")), size=9.5),
+            cell(_x(r.get("ev_ebitda")), align=TA_RIGHT),
+            cell(_x(r.get("pe")), align=TA_RIGHT),
+            cell(r.get("catalysts", 0), align=TA_RIGHT),
         ])
     f = [Paragraph("Ranked Shortlist", H2),
-         data_table(["#", "Ticker", "Verdict", "DCF", "Thesis"], tr,
-                    [0.4, 0.85, 1.05, 0.85, 3.75],
-                    [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_LEFT])]
+         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "DCF", "EV/EBITDA", "P/E", "Cat."], tr,
+                    [0.35, 0.85, 1.0, 1.2, 0.95, 1.2, 0.75, 0.5],
+                    [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
+         Paragraph(f"Peer medians — EV/EBITDA {_x(med.get('ev_ebitda'))} · "
+                   f"P/E {_x(med.get('pe'))} · P/S {_x(med.get('ps'))}", CAPTION)]
+    # Per-name theses
+    f.append(Paragraph("Theses", H2))
+    for r in rows:
+        f.append(Paragraph(f"<b>{r.get('ticker', '')}</b> "
+                           f"<font color='{_hexc(C.status_color(r.get('verdict','')))}'>"
+                           f"[{(r.get('verdict') or '').upper()}]</font> — {_flat(r.get('thesis', ''))}",
+                           SMALL))
     return h, f
 
 
 def _portfolio(d):
     ex, co = d.get("exposure", {}), d.get("correlation", {})
     breaches = d.get("breaches", [])
+    lim = ex.get("limits", {}) or {}
     h = hero("Breaches", f"{len(breaches)} flagged",
              C.NEGATIVE if breaches else C.POSITIVE,
              note=f"Gross {ex.get('gross')} · Net {ex.get('net')} · "
                   f"HHI {co.get('herfindahl_index')} · avg corr {co.get('avg_pairwise_correlation')}")
-    f = [Paragraph(f"Breaches ({len(breaches)})", H2)]
+    f = [Paragraph("Exposure & Limits", H2), _two_col(
+        kv([("Gross exposure", cell(ex.get("gross"))), ("Net exposure", cell(ex.get("net"))),
+            ("Max drawdown", cell(_mg(ex.get("max_drawdown")) if ex.get("max_drawdown") else "n/a")),
+            ], label_w=1.6, val_w=1.8),
+        kv([("Herfindahl (HHI)", cell(co.get("herfindahl_index"))),
+            ("Avg pairwise corr", cell(co.get("avg_pairwise_correlation"))),
+            ("Position limit", cell(_mg(lim.get("max_weight")) if lim.get("max_weight") else "n/a")),
+            ], label_w=1.7, val_w=1.7))]
+
+    # Holdings table
+    hold = d.get("holdings") or []
+    if hold:
+        hr_rows = []
+        for p in hold:
+            hr_rows.append([
+                cell(p.get("ticker"), color=C.NAVY, bold=True),
+                cell(_mg(p.get("weight")), align=TA_RIGHT),
+                cell(_money(p.get("last")), align=TA_RIGHT),
+                cell(_pct(p.get("return_1y")), color=_pct_color(p.get("return_1y")), align=TA_RIGHT),
+                cell(_mg(p.get("volatility")) if p.get("volatility") else "n/a", align=TA_RIGHT),
+                cell(_mg(p.get("max_drawdown")) if p.get("max_drawdown") else "n/a", align=TA_RIGHT),
+                cell((p.get("status") or "").upper(), color=C.status_color(p.get("status", "")), bold=True),
+            ])
+        f += [Paragraph("Holdings", H2),
+              data_table(["Ticker", "Weight", "Last", "1Y Ret", "Vol", "MaxDD", "Status"], hr_rows,
+                         [1.0, 0.85, 1.05, 0.95, 0.75, 0.95, 1.15],
+                         [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_LEFT])]
+
+    f.append(Paragraph(f"Breaches ({len(breaches)})", H2))
     if breaches:
         f.append(data_table(["Type", "Detail"],
                             [[cell(b.get("type", ""), color=C.NEGATIVE, bold=True),
                               cell(b.get("detail", ""))] for b in breaches], [1.7, 5.2]))
     else:
         f.append(Paragraph("None — within all limits.", BODY))
-    triage = d.get("triage") or []
-    if triage:
-        f.append(Paragraph("Position Triage", H2))
-        f.append(data_table(["Status", "Ticker", "Note"],
-                            [[cell((t.get("status") or "").upper(),
-                                   color=C.status_color(t.get("status", "")), bold=True),
-                              cell(t.get("ticker", ""), color=C.NAVY, bold=True),
-                              cell(_flat(t.get("note", "")))] for t in triage],
-                            [1.0, 1.0, 4.9]))
+
+    trades = d.get("trades") or []
+    if trades:
+        f += [Paragraph("Rebalance Trades", H2),
+              data_table(["Ticker", "Action", "Weight Δ"],
+                         [[cell(t.get("ticker"), color=C.NAVY, bold=True),
+                           cell((t.get("action") or "").upper(),
+                                color=C.status_color("sell" if t.get("action") == "sell" else "buy"), bold=True),
+                           cell(_pct(t.get("weight_change")), align=TA_RIGHT)] for t in trades],
+                         [1.4, 1.4, 1.4], [TA_LEFT, TA_LEFT, TA_RIGHT])]
+
+    flags = co.get("concentration_flags") or []
+    if flags:
+        f += [Paragraph("Concentration Flags", H2)] + _bullet_list(
+            [f"{x.get('ticker', x.get('type', ''))}: "
+             + (f"{_mg(x.get('weight'))} weight" if x.get("weight") else _flat(x.get("note", x.get("type", ""))))
+             for x in flags], limit=6)
     return h, f
 
 
 def _filing(d):
     ch = d.get("change", {})
-    h = hero(f"{d.get('ticker', '')} {d.get('form', '')}",
-             f"{ch.get('raw_change_count', 0)} changes",
-             C.NAVY,
-             note=f"Filed {d.get('filing', {}).get('date', '')} · "
-                  f"{len(ch.get('material_changes') or [])} high/medium-significance")
-    f, b = [], d.get("brief") or {}
-    for key, label in (("what_changed", "What Changed"), ("why_it_matters", "Why It Matters"),
+    dg = d.get("digest") or {}
+    comp = d.get("competitive", {})
+    h = hero(f"{d.get('ticker', '')} {d.get('form', '')}", f"{ch.get('raw_change_count', 0)} changes",
+             C.NAVY, note=f"Filed {d.get('filing', {}).get('date', '')} · "
+                          f"{len(ch.get('material_changes') or [])} high/medium-significance")
+    f = []
+    if dg.get("business"):
+        f += [Paragraph("Business", H2), Paragraph(_flat(dg["business"]), BODY)]
+    if dg.get("drivers"):
+        f += [Paragraph("Growth Drivers", H2)] + _bullet_list(dg["drivers"], limit=6)
+    if dg.get("risks"):
+        f += [Paragraph("Key Risks", H2)] + _bullet_list(dg["risks"], limit=6)
+    if dg.get("guidance"):
+        f += [Paragraph("Guidance / Outlook", H2), Paragraph(_flat(dg["guidance"]), BODY)]
+
+    b = d.get("brief") or {}
+    for key, label in (("what_changed", "What Changed YoY"), ("why_it_matters", "Why It Matters"),
                        ("what_to_watch", "What to Watch")):
         if b.get(key):
             f += [Paragraph(label, H2), Paragraph(_flat(b[key]), BODY)]
     mats = ch.get("material_changes") or []
-    if not any(b.values()) and mats:
+    if mats:
         f += [Paragraph("Material Changes", H2),
               data_table(["Section", "Change"],
                          [[cell(m.get("section", ""), color=C.STEEL, bold=True),
                            cell(_flat(m.get("new") or m.get("old") or ""), size=9.5)]
-                          for m in mats[:10]], [1.5, 5.4])]
+                          for m in mats[:8]], [1.5, 5.4])]
+    mar = comp.get("margins") or {}
+    news = comp.get("external_context") or []
+    if mar or news:
+        f.append(Paragraph("Margins & Recent News", H2))
+        if mar:
+            f.append(kv([("Gross / Operating / Net margin",
+                          cell(f"{_mg(mar.get('gross'))} · {_mg(mar.get('operating'))} · {_mg(mar.get('net'))}"))],
+                        label_w=2.6, val_w=4.1))
+        if news:
+            f += _bullet_list([f"{n.get('title')}" for n in news], limit=5, size=9.5)
     return h, f
 
 
@@ -302,12 +489,23 @@ def _reporting(d):
         h = hero("Investor Letter", d.get("period", ""), C.NAVY)
         return h, [Paragraph(_flat(d.get("letter_draft") or "(no draft)"), LEAD)]
     sec = d.get("memo_sections")
-    rec = ""
-    if isinstance(sec, dict):
-        rec = _flat(sec.get("recommendation", ""))
+    m = d.get("metrics", {}) or {}
+    med = m.get("comps_median", {}) or {}
+    mar = m.get("margins", {}) or {}
+    fin = m.get("financials", {}) or {}
+    rec = _flat(sec.get("recommendation", "")) if isinstance(sec, dict) else ""
     h = hero(f"IC Memo · {d.get('ticker', '')}", rec or "Investment Committee Memo",
-             C.NAVY, note="Inputs: " + ", ".join(d.get("inputs_used", [])))
-    f = []
+             C.NAVY, note="Built from: " + ", ".join(d.get("inputs_used", [])))
+    f = [Paragraph("Key Metrics", H2), _two_col(
+        kv([("Price", cell(_money(m.get("price")), color=C.NAVY, bold=True)),
+            ("DCF intrinsic", cell(f"{_money(m.get('dcf_intrinsic_per_share'))} ({_pct(m.get('dcf_upside'))})",
+                                   color=_pct_color(m.get("dcf_upside")))),
+            ("Comps (EV/EBITDA · P/E)", cell(f"{_x(med.get('ev_ebitda'))} · {_x(med.get('pe'))}")),
+            ], label_w=1.8, val_w=1.6),
+        kv([("Revenue", cell(_big(fin.get("revenue")))),
+            ("Net income", cell(_big(fin.get("net_income")))),
+            ("Gross / Net margin", cell(f"{_mg(mar.get('gross'))} · {_mg(mar.get('net'))}")),
+            ], label_w=1.6, val_w=1.8))]
     if isinstance(sec, dict) and sec:
         for k, v in sec.items():
             f += [Paragraph(k.replace("_", " ").title(), H2), Paragraph(_flat(v), BODY)]

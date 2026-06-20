@@ -107,11 +107,14 @@ def synthesize_fields(prompt, keys, *, task, schema, system="", max_tokens=2000,
 
 
 def write_output(name: str, obj: dict) -> str:
-    """Persist a deliverable under the system's data/output dir; return its path."""
+    """Persist the latest result under the system's data/output dir; return its path.
+
+    Overwrites a single stable file per system (``<name>.json``) rather than piling up
+    a new timestamped file every run — the JSON is a regenerable record, not history.
+    """
     out_dir = os.path.join(os.environ.get("TOOLBOX_CACHE_DIR", "."), "output")
     os.makedirs(out_dir, exist_ok=True)
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    path = os.path.join(out_dir, f"{name}-{stamp}.json")
+    path = os.path.join(out_dir, f"{name}.json")
     with open(path, "w") as fh:
         json.dump(obj, fh, indent=2, default=str)
     return path

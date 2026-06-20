@@ -81,6 +81,7 @@ def build_memo(ticker):
     return {
         "system": "reporting", "kind": "memo", "ticker": t,
         "inputs_used": inputs_used,
+        "metrics": inputs,            # distilled numbers, for a key-metrics table in the PDF
         "memo_sections": sections,
         "draft_text": draft_text,
         "needs_model": needs,

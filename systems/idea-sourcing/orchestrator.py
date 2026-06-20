@@ -88,6 +88,8 @@ def enrich(cands):
         c["current_price"] = dcf.get("current_price")
         cm = comp_by.get(c["ticker"], {})
         c["ev_ebitda"], c["pe"], c["ps"] = cm.get("ev_ebitda"), cm.get("pe"), cm.get("ps")
+        if not c.get("market_cap"):          # fill from comps when the screen didn't fetch it
+            c["market_cap"] = cm.get("market_cap")
     return comps.get("median", {})
 
 
@@ -150,8 +152,11 @@ def main(args):
     for s in shortlist:
         if isinstance(s, dict) and s.get("ticker") in cand_by:
             c = cand_by[s["ticker"]]
-            for fld in ("dcf_upside", "ev_ebitda", "pe", "current_price"):
+            for fld in ("dcf_upside", "ev_ebitda", "pe", "ps", "current_price",
+                        "market_cap", "revenue", "company"):
                 s.setdefault(fld, c.get(fld))
+            sig = c.get("catalyst_signals")
+            s.setdefault("catalysts", sum(sig.values()) if isinstance(sig, dict) else 0)
 
     if ranked.get("_needs_model"):
         summary = (f"Sourced {len(cands)} candidate(s): "
