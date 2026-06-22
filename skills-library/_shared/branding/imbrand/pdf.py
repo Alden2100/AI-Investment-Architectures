@@ -392,28 +392,48 @@ def _idea(d):
     rows = d.get("shortlist") or d.get("candidates") or []
     top = rows[0] if rows else {}
     med = d.get("comps_median", {}) or {}
-    h = hero("Top Idea", f"{top.get('ticker', '—')} · {(top.get('verdict') or '').upper()}",
+    flags = d.get("data_flags") or {}
+    h = hero("Top for Diligence", f"{top.get('ticker', '—')} · {(top.get('verdict') or '').upper()}",
              C.status_color(top.get("verdict", "")),
              note=_flat(top.get("thesis", "")) if top.get("thesis") else None)
+    # Prototype / not-advice banner up top.
+    banner = Table([[cell("PROTOTYPE SCREEN — relative ranking for diligence triage, NOT "
+                          "investment advice. Prices/market caps are single-source (Yahoo) and "
+                          "not independently validated; the DCF is a rough screen that "
+                          "undervalues high-growth names. Validate figures before acting.",
+                          color=C.INK, size=9.2)]], colWidths=[6.9 * inch])
+    banner.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C.CLOUD),
+                                ("LINEBEFORE", (0, 0), (0, -1), 3, C.STEEL),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 6),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
     tr = []
     for r in rows:
+        tk = r.get("ticker", "?")
+        mark = " ⚠" if tk in flags else ""
         tr.append([
             cell(r.get("rank", "•"), bold=True),
-            cell(r.get("ticker", "?"), color=C.NAVY, bold=True),
+            cell(tk + mark, color=C.NAVY, bold=True),
             cell((r.get("verdict") or "—").upper(), color=C.status_color(r.get("verdict", "")), bold=True),
             cell(_big(r.get("market_cap")), align=TA_RIGHT),
-            cell(_pct(r.get("dcf_upside")), color=_pct_color(r.get("dcf_upside")), align=TA_RIGHT),
+            cell(_pct(r.get("earnings_growth")) if r.get("earnings_growth") is not None else "—", align=TA_RIGHT),
             cell(_x(r.get("ev_ebitda")), align=TA_RIGHT),
             cell(_x(r.get("pe")), align=TA_RIGHT),
+            cell(_x(r.get("peg")) if r.get("peg") is not None else "—", align=TA_RIGHT),
             cell(_pct(r.get("target_upside")) if r.get("target_upside") is not None else "—",
                  color=_pct_color(r.get("target_upside")), align=TA_RIGHT),
         ])
-    f = [Paragraph("Ranked Shortlist", H2),
-         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "DCF", "EV/EBITDA", "P/E", "Street↑"], tr,
-                    [0.35, 0.85, 1.0, 1.15, 0.9, 1.15, 0.7, 0.85],
-                    [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
+    f = [banner, Spacer(1, 8), Paragraph("Screening Shortlist", H2),
+         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "EPS gr.", "EV/EBITDA", "P/E", "PEG", "Street↑"], tr,
+                    [0.3, 0.95, 0.95, 1.0, 0.85, 1.05, 0.65, 0.6, 0.8],
+                    [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
          Paragraph(f"Peer medians — EV/EBITDA {_x(med.get('ev_ebitda'))} · "
-                   f"P/E {_x(med.get('pe'))} · P/S {_x(med.get('ps'))}", CAPTION)]
+                   f"P/E {_x(med.get('pe'))} · P/S {_x(med.get('ps'))} · PEG {_x(med.get('peg'))}. "
+                   "'Verdict' is a diligence priority (pursue/watch/pass), not a buy/sell call.", CAPTION)]
+    # Per-name data-quality flags
+    if flags:
+        f.append(Paragraph("Data-Quality Flags", H2))
+        for tk, fl in flags.items():
+            f.append(Paragraph(f"<b>{tk}</b> ⚠ — {'; '.join(fl)}", SMALL))
     # Per-name theses
     f.append(Paragraph("Theses", H2))
     for r in rows:
@@ -670,7 +690,7 @@ _BUILDERS = {
 }
 _TITLES = {
     "valuation": lambda d: f"Valuation — {d.get('ticker', '')}",
-    "idea-sourcing": lambda d: "Idea Sourcing — Ranked Shortlist",
+    "idea-sourcing": lambda d: "Idea Screening — Prototype Shortlist",
     "portfolio-monitoring": lambda d: "Portfolio Status Report",
     "filing-intelligence": lambda d: f"Filing Intelligence Brief — {d.get('ticker', '')} {d.get('form', '')}",
     "reporting": lambda d: (f"Investor Letter — {d.get('period', '')}" if d.get("kind") == "letter"
@@ -692,7 +712,7 @@ _ORCH = {
     "governance-audit": "governance-audit-orchestrator",
 }
 _KIND = {  # report type label
-    "idea-sourcing": "Ranked Shortlist", "filing-intelligence": "Filing Intelligence Brief",
+    "idea-sourcing": "Prototype Screening Shortlist", "filing-intelligence": "Filing Intelligence Brief",
     "portfolio-monitoring": "Portfolio Status Report", "valuation": "Valuation Report",
     "reporting": "Investment Committee Memo", "due-diligence": "Due-Diligence Brief",
     "governance-audit": "Governance & Audit Report",

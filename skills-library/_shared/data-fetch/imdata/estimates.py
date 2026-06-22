@@ -155,6 +155,59 @@ def get_ownership(ticker: str, *, force: bool = False) -> dict:
     return out
 
 
+def get_quote(ticker: str, *, force: bool = False) -> dict:
+    """Yahoo's own reported price / market cap / shares / 52-wk range — used to
+    cross-check the figures our pipeline computed. Best-effort, cached."""
+    key = f"quote/{ticker.upper()}"
+    if not force:
+        cached = store.kv_get(key, ttl=_TTL)
+        if cached is not None:
+            return cached
+    out: dict = {}
+    try:
+        info = _yf(ticker).info or {}
+        out = {
+            "price": _num(info.get("currentPrice") or info.get("regularMarketPrice")),
+            "market_cap": _num(info.get("marketCap")),
+            "shares_outstanding": _num(info.get("sharesOutstanding")),
+            "fifty_two_week_high": _num(info.get("fiftyTwoWeekHigh")),
+            "fifty_two_week_low": _num(info.get("fiftyTwoWeekLow")),
+            "currency": info.get("currency"),
+        }
+    except Exception:
+        out = {}
+    out = {k: v for k, v in out.items() if v not in (None, "")}
+    store.kv_put(key, out)
+    return out
+
+
+def data_quality(ticker: str, *, used_price=None, computed_mcap=None) -> list:
+    """Cross-check the price / market cap our pipeline used against Yahoo's own
+    reported figures. Returns a list of human-readable flag strings (empty when
+    consistent). NOTE: a single vendor can be internally consistent yet wrong — a
+    truly independent second price source is needed to validate the level itself;
+    this catches share-count mismatches, currency, stale ticks, and (when a second
+    source is wired) cross-source divergence."""
+    flags = []
+    q = get_quote(ticker)
+    rp, rc = q.get("price"), q.get("market_cap")
+    cur = q.get("currency")
+    if cur and cur != "USD":
+        flags.append(f"non-USD quote ({cur}) — FX not applied")
+    if isinstance(used_price, (int, float)) and isinstance(rp, (int, float)) and rp > 0:
+        if abs(used_price / rp - 1) > 0.05:
+            flags.append(f"price ${used_price:,.2f} ≠ vendor quote ${rp:,.2f}")
+    if isinstance(computed_mcap, (int, float)) and isinstance(rc, (int, float)) and rc > 0:
+        if abs(computed_mcap / rc - 1) > 0.30:
+            flags.append(f"market cap ${computed_mcap/1e9:,.0f}B vs vendor ${rc/1e9:,.0f}B "
+                         "(share-count mismatch)")
+    hi = q.get("fifty_two_week_high")
+    if isinstance(used_price, (int, float)) and isinstance(hi, (int, float)) and hi > 0 \
+            and used_price > hi * 1.10:
+        flags.append("price above the 52-week high — possible bad tick")
+    return flags
+
+
 def consensus_growth(cons: dict) -> Optional[float]:
     """Pull the next-FY consensus revenue growth (a clean number to differentiate a
     DCF growth assumption against), as a decimal. None if unavailable."""

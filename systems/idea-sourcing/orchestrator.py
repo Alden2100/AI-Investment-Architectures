@@ -106,8 +106,18 @@ def enrich(cands):
         c["current_price"] = dcf.get("current_price")
         cm = comp_by.get(c["ticker"], {})
         c["ev_ebitda"], c["pe"], c["ps"] = cm.get("ev_ebitda"), cm.get("pe"), cm.get("ps")
+        # Growth + margins so the screen rests on more than a single absolute DCF
+        # (which is unreliable for hyper-growth names).
+        c["revenue_growth"] = cm.get("revenue_growth")
+        c["earnings_growth"] = cm.get("earnings_growth")
+        c["net_margin"] = cm.get("net_margin")
+        c["peg"] = cm.get("peg")
         if not c.get("market_cap"):          # fill from comps when the screen didn't fetch it
             c["market_cap"] = cm.get("market_cap")
+        # Data-quality cross-check: flag prices/market caps that disagree with the
+        # vendor's own reported figures (share-count mismatch, currency, bad tick).
+        c["data_flags"] = estimates.data_quality(
+            c["ticker"], used_price=c.get("current_price"), computed_mcap=c.get("market_cap"))
     return comps.get("median", {})
 
 
@@ -137,24 +147,34 @@ def main(args):
              "intrinsic_value_per_share": c.get("intrinsic_value_per_share"),
              "current_price": c.get("current_price"),
              "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"), "ps": c.get("ps"),
+             "revenue_growth": c.get("revenue_growth"), "earnings_growth": c.get("earnings_growth"),
+             "net_margin": c.get("net_margin"), "peg": c.get("peg"),
              "street_target_mean": c.get("target_mean"),
              "street_target_upside": c.get("target_upside"),
              "street_recommendation": c.get("recommendation"),
              "analysts": c.get("n_analysts"),
+             "data_flags": c.get("data_flags") or [],
              "catalysts": _cat(c),
              "recent_headlines": (c.get("top_headlines") or [])[:6]} for c in cands]
     instr = (
-        "Rank these candidates into an investment shortlist. Return an object with "
-        "exactly two keys: 'shortlist' (an array of {ticker, rank, thesis, verdict}) "
-        "and 'summary' (one sentence). Each candidate includes its ACTUAL flagged "
-        "catalysts (with rationale) and recent headlines — your 'thesis' must name a "
-        "specific driver (a real catalyst or headline) plus the valuation case "
-        "(dcf_upside, cheapness vs comps_median), NOT a count or a tautology. Weigh "
-        "mandate fit, catalyst strength, and valuation upside. verdict is one of "
-        "pursue/watch/pass. Ground every thesis in the figures and events given for "
-        "that name; do not invent. Each name also carries Street consensus "
-        "(street_target_upside, street_recommendation) — note where a name screens cheap on "
-        "our numbers but the Street already agrees (crowded) vs where you'd be early.\n\n"
+        "Produce a RELATIVE SCREENING shortlist — a ranked list of names worth deeper "
+        "diligence, NOT buy/sell investment advice. Return an object with exactly two "
+        "keys: 'shortlist' (an array of {ticker, rank, thesis, verdict}) and 'summary' "
+        "(one sentence). Each candidate includes its ACTUAL flagged catalysts (with "
+        "rationale) and recent headlines — your 'thesis' must name a specific driver (a "
+        "real catalyst or headline) plus the relative-valuation case, NOT a count or a "
+        "tautology.\n"
+        "IMPORTANT valuation guidance: the absolute 'dcf_upside' is a crude single-stage "
+        "screen and is UNRELIABLE for high-growth names (it will show deep negatives for "
+        "hyper-growth compounders) — do NOT treat it as fair value. Anchor the relative "
+        "call on growth-adjusted multiples (pe/ev_ebitda vs comps_median, peg), "
+        "revenue/earnings growth, net_margin, catalysts, and where the name sits vs Street "
+        "consensus (street_target_upside, street_recommendation: cheap on our numbers but "
+        "Street already there = crowded; not-yet-consensus = potentially early). If a "
+        "candidate has non-empty 'data_flags', explicitly CAVEAT that name's numbers as "
+        "possibly unreliable and lower your confidence. verdict is a screening priority — "
+        "one of pursue/watch/pass — not a recommendation. Ground every thesis in the "
+        "figures and events given; do not invent.\n\n"
         f"comps_median: {json.dumps(comps_median)}\n")
     rank_system = orch.persona("screening-analyst", audience="a portfolio manager deciding where to spend diligence time")
     ranked = orch.synthesize(instr + f"candidates: {json.dumps(rich, default=str)}",
@@ -222,10 +242,14 @@ def main(args):
     mandate = ", ".join(mandate_bits) or "unconstrained"
     top = shortlist[0] if shortlist else {}
     n_pursue = sum(1 for s in shortlist if (s.get("verdict") or "").lower() == "pursue")
-    bluf = (f"Mandate: {mandate}. Screened to {len(cands)} candidate(s); top pick "
-            f"{top.get('ticker', '—')} ({(top.get('verdict') or '').upper()}) — "
+    # Collect per-name data-quality flags so the report can caveat suspect numbers.
+    data_flags = {c["ticker"]: c.get("data_flags") for c in cands if c.get("data_flags")}
+    bluf = (f"PROTOTYPE SCREEN (relative ranking for diligence triage — not investment "
+            f"advice). Mandate: {mandate}. Screened to {len(cands)} candidate(s); top for "
+            f"diligence: {top.get('ticker', '—')} ({(top.get('verdict') or '').upper()}) — "
             f"{orch.text_field({'t': top.get('thesis')}, 't')[:200]}. "
-            f"{n_pursue} name(s) rated PURSUE for full due diligence.")
+            f"{n_pursue} name(s) flagged PURSUE for deeper work."
+            + (f" ⚠ Data-quality flags on: {', '.join(data_flags)}." if data_flags else ""))
     funnel = [
         {"param": "Mandate", "value": mandate, "why": "Universe definition (sector / size / tickers)."},
         {"param": "Candidates surviving screen", "value": str(len(cands)), "why": "Names passing the mandate gates."},
@@ -244,11 +268,19 @@ def main(args):
         {"skill": "catalyst-flagger / news-fetcher", "note": "Scanned recent 8-Ks and headlines for event-driven catalysts."},
         {"skill": "dcf-valuation / comps-builder", "note": f"Per-name DCF upside and peer multiples; peer median EV/EBITDA {(comps_median or {}).get('ev_ebitda')}x."},
     ]
-    risks = ["DCF uses conservative house defaults (8% growth, 9% WACC); high-growth names screen as 'expensive' on this base.",
-             "Free-data limitations: single-year fundamentals, no liquidity/ADV screen, prices best-effort."]
-    falsifiers = [f"Advance {top.get('ticker', 'the top name')} to full due diligence; the thesis breaks if its catalyst fails to materialise or valuation re-rates to peers.",
+    risks = ["This is a relative SCREEN for diligence triage, not investment advice — the ranking is not a buy/sell verdict and each name needs full diligence.",
+             "Prices/market caps are from a single free vendor (Yahoo via yfinance) and are NOT independently cross-validated; a vendor can be internally consistent yet wrong (see any per-name data-quality flags). Validate the price/share-count join before relying on a level.",
+             "The DCF is a crude single-stage screen on house defaults — it materially undervalues hyper-growth names and is used only as a rough sort, not as fair value.",
+             "Comps use a simple peer-median multiple across mixed business models; treat the relative read as directional.",
+             "Fundamentals are latest-annual (not TTM); no liquidity/ADV screen applied."]
+    if data_flags:
+        risks.insert(1, "⚠ Data-quality flags raised on " + "; ".join(
+            f"{tk}: {', '.join(fl)}" for tk, fl in data_flags.items()) + ".")
+    falsifiers = [f"Before acting, validate {top.get('ticker', 'each name')}'s price, share count and TTM figures against a second source.",
+                  "Advance a name only after diligence confirms the catalyst and the relative-value read holds on TTM/forward numbers.",
                   "Re-screen if the mandate (sector/size) changes."]
-    report = orch.report(classification="Internal", as_of={"prices": today, "financials": "latest annual"},
+    report = orch.report(classification="Prototype screen — not investment advice",
+                         as_of={"prices": today, "financials": "latest annual"},
                          assumptions=funnel, provenance=provenance, commentary=commentary,
                          bluf=bluf, risks=risks, falsifiers=falsifiers)
 
@@ -258,6 +290,7 @@ def main(args):
         "candidates": cands,
         "comps_median": comps_median,
         "shortlist": shortlist,
+        "data_flags": data_flags,
         **orch.model_meta(ranked),
         "report": report,
         "summary": summary,
