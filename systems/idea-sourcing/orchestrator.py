@@ -29,7 +29,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit, estimates              # noqa: E402
+from imdata import skillkit, estimates, ownership    # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 RANK_SCHEMA = {
@@ -114,6 +114,10 @@ def enrich(cands):
         c["peg"] = cm.get("peg")
         if not c.get("market_cap"):          # fill from comps when the screen didn't fetch it
             c["market_cap"] = cm.get("market_cap")
+        # Insider (Form 4) smart-money signal — net open-market buying/selling.
+        ins = ownership.insider_summary(c["ticker"])
+        c["insider_signal"] = ins.get("signal")
+        c["insider_net_usd"] = ins.get("net_open_market_usd")
         # Data-quality cross-check: flag prices/market caps that disagree with the
         # vendor's own reported figures (share-count mismatch, currency, bad tick).
         c["data_flags"] = estimates.data_quality(
@@ -153,6 +157,7 @@ def main(args):
              "street_target_upside": c.get("target_upside"),
              "street_recommendation": c.get("recommendation"),
              "analysts": c.get("n_analysts"),
+             "insider_signal": c.get("insider_signal"),
              "data_flags": c.get("data_flags") or [],
              "catalysts": _cat(c),
              "recent_headlines": (c.get("top_headlines") or [])[:6]} for c in cands]
@@ -172,7 +177,9 @@ def main(args):
         "consensus (street_target_upside, street_recommendation: cheap on our numbers but "
         "Street already there = crowded; not-yet-consensus = potentially early). If a "
         "candidate has non-empty 'data_flags', explicitly CAVEAT that name's numbers as "
-        "possibly unreliable and lower your confidence. verdict is a screening priority — "
+        "possibly unreliable and lower your confidence. 'insider_signal' (SEC Form 4) is a "
+        "smart-money tell — recent net insider BUYING supports a name, sustained SELLING is "
+        "a mild caution (routine grants/tax sales are not signals). verdict is a screening priority — "
         "one of pursue/watch/pass — not a recommendation. Ground every thesis in the "
         "figures and events given; do not invent.\n"
         + (f"INVESTOR TILT: the user is screening with a '{args.theme}' objective — weight the "

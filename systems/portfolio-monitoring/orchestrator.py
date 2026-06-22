@@ -122,7 +122,8 @@ def main(args):
 
     # Macro / volatility risk overlay (public: US Treasury + CBOE VIX). The regime
     # frames how much the book's concentration/correlation actually matters now.
-    macro_ctx = {"rates": macro.snapshot(), "vix": volatility.vix()}
+    macro_ctx = {"rates": macro.snapshot(), "vix": volatility.vix(),
+                 "spx_positioning": macro.cot_positioning("S&P 500")}
     macro_ctx = {k: v for k, v in macro_ctx.items() if v}
 
     # --- breaches are computed deterministically; the model never decides these ---

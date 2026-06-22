@@ -32,7 +32,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit, estimates              # noqa: E402
+from imdata import skillkit, estimates, segments, macro   # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 
@@ -73,6 +73,10 @@ def build_memo(ticker):
         # thesis against what the market expects, and flag ownership/short risk.
         "consensus": estimates.get_consensus(t),
         "ownership": estimates.get_ownership(t),
+        # Segment mix (SEC XBRL) for a sum-of-parts view + macro backdrop (public).
+        "segments": {k: v for k, v in segments.segments(t).items()
+                     if k in ("business", "geographic") and v},
+        "macro": macro.snapshot(),
     }
     # Coherence ANCHOR (prevention): state the directional signal the numbers imply,
     # so the memo's recommendation can't drift into contradicting its own DCF.
