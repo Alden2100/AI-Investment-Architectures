@@ -61,6 +61,22 @@ def _latest_annual(ticker, tags):
     return None, None
 
 
+def _annual_map(ticker, tags, n=6):
+    """period_end -> value for the last n annual (10-K) periods (deduped)."""
+    for tag in tags:
+        rows = [r for r in edgar.get_concept(ticker, tag)
+                if r["value"] is not None and r["form"] == "10-K" and r["period_end"]]
+        if rows:
+            m = {}
+            for r in sorted(rows, key=lambda x: x["period_end"], reverse=True):
+                if r["period_end"] not in m:
+                    m[r["period_end"]] = float(r["value"])
+                if len(m) >= n:
+                    break
+            return m
+    return {}
+
+
 def _round(x):
     return round(x, 4) if x is not None else None
 
@@ -83,6 +99,48 @@ def main(args):
         "period_end": rev_end,
     }
 
+    # --- multi-year margin trend (durability evidence, not a single snapshot) --
+    rev_map = _annual_map(args.ticker, REVENUE_TAGS)
+    gp_map = _annual_map(args.ticker, GROSS_PROFIT_TAGS)
+    oi_map = _annual_map(args.ticker, OPERATING_INCOME_TAGS)
+    ni_map = _annual_map(args.ticker, NET_INCOME_TAGS)
+    margin_trend = []
+    for y in sorted(rev_map, reverse=True)[:5]:
+        rev = rev_map.get(y)
+        if not rev:
+            continue
+        margin_trend.append({
+            "period_end": y,
+            "gross": _round(gp_map[y] / rev) if y in gp_map else None,
+            "operating": _round(oi_map[y] / rev) if y in oi_map else None,
+            "net": _round(ni_map[y] / rev) if y in ni_map else None,
+        })
+
+    # --- ROIC = NOPAT / invested capital (pricing power shows up as ROIC) ------
+    eq_map = _annual_map(args.ticker, ["StockholdersEquity"])
+    debt_lt = _annual_map(args.ticker, ["LongTermDebt", "LongTermDebtNoncurrent"])
+    debt_cur = _annual_map(args.ticker, ["LongTermDebtCurrent", "DebtCurrent"])
+    cash_map = _annual_map(args.ticker, ["CashAndCashEquivalentsAtCarryingValue",
+                                         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"])
+    pretax_map = _annual_map(args.ticker, [
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"])
+    tax_map = _annual_map(args.ticker, ["IncomeTaxExpenseBenefit"])
+    roic_series = []
+    for y in sorted(oi_map, reverse=True)[:3]:
+        oi = oi_map.get(y)
+        eq = eq_map.get(y)
+        if oi is None or eq is None:
+            continue
+        invested = eq + (debt_lt.get(y, 0.0) or 0.0) + (debt_cur.get(y, 0.0) or 0.0) - (cash_map.get(y, 0.0) or 0.0)
+        if invested and invested > 0:
+            tr = 0.21
+            if pretax_map.get(y) and tax_map.get(y) is not None and pretax_map[y] > 0:
+                tr = max(0.0, min(0.35, tax_map[y] / pretax_map[y]))
+            nopat = oi * (1 - tr)
+            roic_series.append({"period_end": y, "roic": _round(nopat / invested)})
+    roic = roic_series[0]["roic"] if roic_series else None
+
     row = edgar.latest_filing(args.ticker, "10-K")
     if row is None:
         raise ValueError(f"No 10-K found for {args.ticker}.")
@@ -93,19 +151,24 @@ def main(args):
                  r"business", r"intellectual property"],
     )
 
+    import json as _json
     margin_lines = (
-        f"Computed margins for the latest annual period (period_end {rev_end}), "
-        "computed in Python from XBRL — quote exactly, do not recompute:\n"
-        f"- gross_margin: {gross_margin}\n"
-        f"- operating_margin: {operating_margin}\n"
-        f"- net_margin: {net_margin}\n"
+        f"Computed in Python from XBRL — quote exactly, do not recompute.\n"
+        f"Latest annual margins (period_end {rev_end}): gross {gross_margin}, "
+        f"operating {operating_margin}, net {net_margin}.\n"
+        f"Margin TREND (last {len(margin_trend)} annual periods, newest first): "
+        f"{_json.dumps(margin_trend)}\n"
+        f"ROIC (NOPAT / invested capital, newest first): {_json.dumps(roic_series)}\n"
     )
     prompt = (
         f"Company: {info['title']} ({info['ticker']}). 10-K filed {row['filing_date']}.\n\n"
         f"{margin_lines}\n"
         f"10-K text (excerpted around business/competition/risk):\n{clip}\n\n"
-        "Assess the economic moat: classify moat_type, judge durability (high/medium/low + why), "
-        "list threats, and write a summary."
+        "Assess the economic moat. A durable moat shows up as HIGH and STABLE-OR-RISING "
+        "margins and a ROIC comfortably above the cost of capital (~9-11%); margin "
+        "compression or ROIC erosion is evidence AGAINST durability. Use the trend, not "
+        "just the latest snapshot. Classify moat_type, judge durability (high/medium/low "
+        "+ why, citing the trend/ROIC), list threats, and write a summary."
     )
 
     analysis = _route(prompt, task="reasoning", system=SYSTEM, schema=SCHEMA, max_tokens=2500)
@@ -113,6 +176,9 @@ def main(args):
         "ticker": info["ticker"],
         "company": info["title"],
         "margins": margins,
+        "margin_trend": margin_trend,
+        "roic": roic,
+        "roic_series": roic_series,
     }
     return skillkit.model_output(analysis, meta)
 

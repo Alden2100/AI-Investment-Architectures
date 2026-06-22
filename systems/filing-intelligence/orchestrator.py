@@ -172,28 +172,36 @@ def main(args):
         {"section": "diff", "new": (b.get("new") or b.get("old", ""))[:300],
          "significance": "unrated"} for b in chg["diff_blocks"][:6]]
 
-    def _brief_prompt(detail):
+    def _brief_prompt(detail, ctx=6000):
         return (
-            "Write a Filing Intelligence Brief from these classified changes. Return an "
-            "object with keys 'what_changed', 'why_it_matters', 'what_to_watch' (each a "
-            "short paragraph) and 'summary' (one sentence). Focus on the high/medium "
-            "significance items; ignore boilerplate. Quote numbers exactly.\n\n"
+            "Write a Filing Intelligence Brief. Return an object with keys "
+            "'what_changed', 'why_it_matters', 'what_to_watch' (each a substantive "
+            "paragraph) and 'summary' (one sentence). 'what_changed' states the material "
+            "moves vs the prior period; 'why_it_matters' explains the IMPLICATION for the "
+            "thesis/business (not a restatement); 'what_to_watch' names concrete, "
+            "monitorable triggers. Focus on the high/medium-significance items; ignore "
+            "boilerplate. Quote numbers exactly. Use the filing excerpt for business "
+            "context, but ground claims about CHANGE in the classified_changes.\n\n"
             f"company: {args.ticker.upper()} {args.form} ({meta['date']})\n"
             f"classified_changes: {json.dumps(changes_for_model, default=str)[:detail]}\n"
             f"margins: {json.dumps(comp.get('margins', {}), default=str)}\n"
-            f"recent_news: {json.dumps([c['title'] for c in comp.get('external_context', [])][:4])}"
+            f"recent_news: {json.dumps([c['title'] for c in comp.get('external_context', [])][:6])}\n"
+            f"filing_excerpt (business/MD&A/risk prose, for context): {(excerpt or '')[:ctx]}"
         )
 
     KEYS = ("what_changed", "why_it_matters", "what_to_watch")
-    brief = orch.synthesize(_brief_prompt(4500), task="synthesis", schema=BRIEF_SCHEMA,
-                            max_tokens=1600,
-                            system="You are an equity analyst. Precise, skeptical, concise.")
+    brief_system = orch.persona("filing-analyst",
+                                audience="the portfolio manager who holds or is sizing this name")
+    brief = orch.synthesize(_brief_prompt(6000), task="synthesis", schema=BRIEF_SCHEMA,
+                            max_tokens=3500, system=brief_system)
     brief_fields = None if brief.get("_needs_model") else orch.recover(brief, KEYS)
     # one retry with a smaller prompt if the local model came back empty
     if not brief.get("_needs_model") and not any((brief_fields or {}).values()):
-        brief = orch.synthesize(_brief_prompt(2200), task="synthesis", schema=BRIEF_SCHEMA,
-                                max_tokens=1400,
-                                system="Equity analyst. Output only the JSON object, all four keys filled.")
+        brief = orch.synthesize(_brief_prompt(3000, ctx=3000), task="synthesis", schema=BRIEF_SCHEMA,
+                                max_tokens=2500,
+                                system=orch.persona("filing-analyst",
+                                    audience="the portfolio manager who holds or is sizing this name",
+                                    json_only=True))
         brief_fields = orch.recover(brief, KEYS)
     # Always emit a clean, deterministic one-line summary (never the model's raw blob).
     has_brief = bool(brief_fields and any(brief_fields.values()))
@@ -254,7 +262,7 @@ def main(args):
         "filing": meta, "change": chg, "competitive": comp,
         "section_map": section_map, "red_flags": red_flags,
         "brief": brief_fields,
-        "model_route": brief.get("_route", "none"),
+        **orch.model_meta(brief),
         "report": report,
         "summary": summary,
     }

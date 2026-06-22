@@ -11,12 +11,73 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 
 
 def now_stamp() -> str:
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+
+
+# --------------------------------------------------------------------------- #
+# Analyst persona / house standard. The judgment layer was being given one-liner
+# system prompts ("You are a valuation analyst. Decisive, brief.") with no
+# audience, no rubric — which caps quality even on a strong model. persona() loads
+# the reusable agent ROLE file (skills-library/agents/<role>.md — these were never
+# actually loaded into any prompt before) and layers a named audience + a writing
+# rubric that targets the exact failure modes: tautological theses, number-dumps
+# with no "so what", hedging filler, invented figures.
+# --------------------------------------------------------------------------- #
+HOUSE_STANDARD = """\
+HOUSE STANDARD — how we write (this is what separates analyst-grade work from a generic summary):
+- Lead with the verdict. The reader must know your call and why from the first sentence.
+- Argue, don't list. Tie every number to what it IMPLIES for the thesis — a figure with no "so what" is noise. Connect cause to effect.
+- Be specific and quantified. Cite the exact figure and period; never "strong" or "solid" on its own.
+- Render ratios, margins, and growth as PERCENTAGES (a value like 0.3615 means 36.2%), never as raw decimals. Quote dollar and per-share figures exactly as given.
+- Take a differentiated view. Where your read differs from the obvious or consensus interpretation, say so and why. A note with no edge is not worth writing.
+- Name the swing factor. State the single thing that would change your mind, concretely enough to monitor.
+- Ground everything in the data provided. Do NOT invent figures, events, guidance, or quotes; if something material is missing, say so plainly rather than guessing.
+- No filler. No hedging boilerplate, no marketing language, no restating the prompt. Every sentence earns its place."""
+
+_AGENT_CACHE: dict = {}
+
+
+def _load_agent(role: str) -> str:
+    """Return the body (frontmatter stripped) of skills-library/agents/<role>.md,
+    or '' if unavailable. Cached per process."""
+    if role in _AGENT_CACHE:
+        return _AGENT_CACHE[role]
+    body = ""
+    root = os.environ.get("IM_LIB_ROOT")
+    if root:
+        path = os.path.join(root, "agents", f"{role}.md")
+        try:
+            raw = open(path, encoding="utf-8").read()
+            raw = re.sub(r"^---\n.*?\n---\n", "", raw, count=1, flags=re.DOTALL)
+            # Drop the machine-facing Contract block — it's I/O wiring, not guidance.
+            raw = re.split(r"\n##\s+Contract\b", raw, maxsplit=1)[0]
+            body = raw.strip()
+        except OSError:
+            body = ""
+    _AGENT_CACHE[role] = body
+    return body
+
+
+def persona(role: str, *, audience: str, json_only: bool = False,
+            extra: str = "") -> str:
+    """Compose a rich analyst system prompt: the agent role file + a named
+    audience + the house writing standard. Use as the ``system=`` for a drafting/
+    judgment synthesize call instead of a one-line persona."""
+    base = _load_agent(role) or f"You are a senior {role.replace('-', ' ')}."
+    parts = [base, f"\nYOUR AUDIENCE: {audience}. Write directly for them, at their level.",
+             HOUSE_STANDARD]
+    if extra:
+        parts.append(extra.strip())
+    if json_only:
+        parts.append("Return ONLY the single JSON object the schema describes, every "
+                     "field filled with substantive content — no preamble, no fences.")
+    return "\n\n".join(parts)
 
 
 def report(*, classification="Internal", as_of=None, assumptions=None, provenance=None,
@@ -52,6 +113,75 @@ def synthesize(prompt: str, *, task: str, system: str = "", schema=None,
     from imrouter import route  # local import: sys.path is set by the orchestrator
     return route(prompt, task=task, system=system, schema=schema,
                  max_tokens=max_tokens, policy=None)
+
+
+def numeric_lean(dcf_upside=None, price=None, value_range=None, band=0.15) -> str:
+    """The directional lean implied by the NUMBERS (deterministic): 'bullish' /
+    'bearish' / 'neutral'. Uses DCF upside primarily; price-vs-value-range as a
+    cross-check. This is the anchor the model's recommendation must not contradict."""
+    votes = []
+    if isinstance(dcf_upside, (int, float)):
+        votes.append("bullish" if dcf_upside >= band else
+                     "bearish" if dcf_upside <= -band else "neutral")
+    if isinstance(price, (int, float)) and isinstance(value_range, dict):
+        lo, hi = value_range.get("low"), value_range.get("high")
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            votes.append("bearish" if price > hi else "bullish" if price < lo else "neutral")
+    if not votes:
+        return "neutral"
+    if "bullish" in votes and "bearish" not in votes:
+        return "bullish"
+    if "bearish" in votes and "bullish" not in votes:
+        return "bearish"
+    return "neutral"
+
+
+_BULL_RE = re.compile(r"\b(buy|overweight|accumulate|add to|initiate|long|outperform|"
+                      r"attractive|undervalued|compelling)\b", re.I)
+_BEAR_RE = re.compile(r"\b(sell|underweight|trim|reduce|avoid|short|exit|"
+                      r"overvalued|expensive|unattractive)\b", re.I)
+
+
+def text_lean(text: str) -> str:
+    """The directional lean a recommendation's PROSE expresses: 'bullish' /
+    'bearish' / 'neutral' (neutral when it's hold-like, mixed, or unclear)."""
+    if not isinstance(text, str) or not text.strip():
+        return "neutral"
+    bull, bear = bool(_BULL_RE.search(text)), bool(_BEAR_RE.search(text))
+    if bull and not bear:
+        return "bullish"
+    if bear and not bull:
+        return "bearish"
+    return "neutral"
+
+
+def coherence(numeric: str, rec_text: str) -> str:
+    """Return a warning string if the recommendation prose directionally
+    contradicts the numbers, else ''. (e.g. memo says BUY while DCF says -50%.)"""
+    spoken = text_lean(rec_text)
+    if {numeric, spoken} == {"bullish", "bearish"}:
+        return (f"COHERENCE: the recommendation reads {spoken.upper()} but the numbers "
+                f"point {numeric.upper()} (e.g. DCF/price). The call must be reconciled "
+                "with the valuation or explicitly justify why the model is wrong.")
+    return ""
+
+
+def model_meta(res: dict) -> dict:
+    """Provenance for the narrative model step, so a qwen/degraded run is never
+    mistaken for Claude. Spread into an orchestrator's output dict alongside the
+    deterministic fields:  ``**orch.model_meta(brief)``.
+
+    Returns ``{model_route, model_id, degraded}``:
+      * model_route — "claude" | "local" | "none"
+      * model_id    — the concrete model (e.g. claude-opus-4-8, qwen3.5:9b)
+      * degraded    — True when qwen stood in for a high-judgment Claude route
+    """
+    res = res or {}
+    return {
+        "model_route": res.get("_route", "none"),
+        "model_id": res.get("_model"),
+        "degraded": bool(res.get("_degraded")),
+    }
 
 
 def recover(result: dict, keys) -> dict:

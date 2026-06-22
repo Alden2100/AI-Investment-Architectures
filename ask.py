@@ -529,10 +529,30 @@ def render(system: str, d: dict) -> str:
                 add(f"  {k}:")
                 L.extend("  " + x for x in _bullets(v, limit=8))
 
+    if d.get("coherence_warning"):
+        add("")
+        add("⚠ " + str(d["coherence_warning"]))
+
     cs = _clean_summary(d)
     if cs:
         add("")
         add("➤ " + cs)
+
+    # Name the model that wrote the narrative, so a qwen run is never mistaken for
+    # Claude. Loudly flag a needs-model (no narrative) or degraded (qwen stand-in) run.
+    route = d.get("model_route")
+    if d.get("degraded"):
+        add("")
+        add(f"⚠ DEGRADED — narrative written by the local fallback ({d.get('model_id') or 'qwen'}), "
+            "NOT Claude. Quality is capped. Run `claude login` (Max plan) for analyst-grade output.")
+    elif route == "none" or d.get("needs_model"):
+        add("")
+        add("⚠ No model narrative — the Claude session is unavailable, so only the "
+            "deterministic numbers above were produced. Run `claude login` (Max plan), "
+            "or set IM_ALLOW_DEGRADED=1 to allow the local qwen stand-in.")
+    elif route and route != "n/a":
+        add("")
+        add(f"· narrative model: {route}" + (f" ({d.get('model_id')})" if d.get("model_id") else ""))
     return "\n".join(L)
 
 

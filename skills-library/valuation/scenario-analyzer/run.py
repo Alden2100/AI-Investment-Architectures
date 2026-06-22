@@ -41,24 +41,28 @@ def _latest_any(ticker, tags):
     return None
 
 
-def _intrinsic_per_share(base_fcf, g, r, gt, years, net_debt, shares):
-    """Replicated unlevered-FCF DCF -> intrinsic value per share."""
+def _intrinsic_per_share(base_fcf, g, r, gt, years, fade_years, net_debt, shares):
+    """Replicated 2-stage (explicit + linear fade) unlevered-FCF DCF -> value/share.
+    Mirrors dcf-valuation exactly so the BASE scenario equals the DCF intrinsic."""
     if r <= gt:
         return None
+    growth_path = [g] * years + [g + (gt - g) * (i / fade_years)
+                                 for i in range(1, max(0, fade_years) + 1)]
+    fcf_t = base_fcf
     pv_fcf_total = 0.0
-    for t in range(1, years + 1):
-        fcf_t = base_fcf * (1 + g) ** t
+    for t, g_t in enumerate(growth_path, start=1):
+        fcf_t = fcf_t * (1 + g_t)
         pv_fcf_total += fcf_t / (1 + r) ** t
-    fcf_n = base_fcf * (1 + g) ** years
-    tv = fcf_n * (1 + gt) / (r - gt)
-    pv_tv = tv / (1 + r) ** years
+    n = len(growth_path)
+    tv = fcf_t * (1 + gt) / (r - gt)
+    pv_tv = tv / (1 + r) ** n
     ev = pv_fcf_total + pv_tv
     equity = ev - net_debt
     return equity / shares if shares else None
 
 
-def _scenario(base_fcf, g, r, gt, years, net_debt, shares, price):
-    ivps = _intrinsic_per_share(base_fcf, g, r, gt, years, net_debt, shares)
+def _scenario(base_fcf, g, r, gt, years, fade_years, net_debt, shares, price):
+    ivps = _intrinsic_per_share(base_fcf, g, r, gt, years, fade_years, net_debt, shares)
     upside = (ivps / price - 1) if (ivps is not None and price) else None
     return {
         "growth": round(g, 6),
@@ -103,21 +107,30 @@ def main(args):
         raise ValueError("Could not determine shares outstanding; pass --shares.")
 
     price = args.price if args.price is not None else prices.last_price(args.ticker)
+    fade_years = max(0, args.fade_years)
+
+    # --- company-specific scenario widths (not a fixed ±3% for every name) -
+    # Growth dispersion scales with the company's OWN growth rate (a 15%-grower has a
+    # wider plausible band than a 4%-grower); WACC dispersion scales with beta (riskier
+    # names get a wider rate band). Explicit deltas, if passed, override the derivation.
+    beta = args.beta if args.beta is not None else 1.0
+    g_delta = (args.growth_delta if args.growth_delta is not None
+               else round(max(0.02, min(0.08, 0.4 * abs(g))), 4))
+    r_delta = (args.wacc_delta if args.wacc_delta is not None
+               else round(max(0.005, min(0.025, 0.01 * beta)), 4))
 
     # --- scenarios ------------------------------------------------------- #
-    bull_g = g + args.bull_growth_delta
-    bull_r = r + args.bull_wacc_delta
-    bear_g = g + args.bear_growth_delta
-    bear_r = r + args.bear_wacc_delta
+    bull_g, bull_r = g + g_delta, r - r_delta      # faster growth, lower risk
+    bear_g, bear_r = g - g_delta, r + r_delta      # slower growth, higher risk
     scenarios = {
-        "bull": _scenario(base_fcf, bull_g, bull_r, gt, args.years, net_debt, shares, price),
-        "base": _scenario(base_fcf, g, r, gt, args.years, net_debt, shares, price),
-        "bear": _scenario(base_fcf, bear_g, bear_r, gt, args.years, net_debt, shares, price),
+        "bull": _scenario(base_fcf, bull_g, bull_r, gt, args.years, fade_years, net_debt, shares, price),
+        "base": _scenario(base_fcf, g, r, gt, args.years, fade_years, net_debt, shares, price),
+        "bear": _scenario(base_fcf, bear_g, bear_r, gt, args.years, fade_years, net_debt, shares, price),
     }
 
     # --- sensitivity grid: growth (rows) x discount rate (cols) ---------- #
-    growth_axis = [round(g - 0.02, 6), round(g, 6), round(g + 0.02, 6)]
-    rate_axis = [round(r - 0.01, 6), round(r, 6), round(r + 0.01, 6)]
+    growth_axis = [round(g - g_delta, 6), round(g, 6), round(g + g_delta, 6)]
+    rate_axis = [round(r - r_delta, 6), round(r, 6), round(r + r_delta, 6)]
     matrix = []
     for gg in growth_axis:
         row = []
@@ -125,7 +138,7 @@ def main(args):
             if rr <= gt:
                 row.append(None)
             else:
-                ivps = _intrinsic_per_share(base_fcf, gg, rr, gt, args.years, net_debt, shares)
+                ivps = _intrinsic_per_share(base_fcf, gg, rr, gt, args.years, fade_years, net_debt, shares)
                 row.append(round(ivps, 2) if ivps is not None else None)
         matrix.append(row)
     sensitivity_table = {
@@ -139,10 +152,12 @@ def main(args):
     assumptions = {
         "base_fcf": base_fcf, "base_fcf_note": fcf_note,
         "growth": g, "discount_rate": r, "terminal_growth": gt,
-        "years": args.years, "net_debt": net_debt, "shares": shares,
+        "years": args.years, "fade_years": fade_years,
+        "net_debt": net_debt, "shares": shares,
         "price": round(price, 2) if price else None,
-        "bull_growth_delta": args.bull_growth_delta, "bull_wacc_delta": args.bull_wacc_delta,
-        "bear_growth_delta": args.bear_growth_delta, "bear_wacc_delta": args.bear_wacc_delta,
+        "beta": round(beta, 3), "growth_delta": g_delta, "wacc_delta": r_delta,
+        "scenario_basis": (f"bull/bear = base growth ±{g_delta:.1%} (scaled to the "
+                           f"company's growth) and WACC ∓{r_delta:.2%} (scaled to beta {beta:.2f})"),
     }
 
     base_iv = scenarios["base"]["intrinsic_value_per_share"]
@@ -174,11 +189,13 @@ if __name__ == "__main__":
     p.add_argument("--discount-rate", type=float, default=0.09)
     p.add_argument("--terminal-growth", type=float, default=0.025)
     p.add_argument("--years", type=int, default=5)
+    p.add_argument("--fade-years", type=int, default=5)
     p.add_argument("--net-debt", type=float, default=None)
     p.add_argument("--shares", type=float, default=None)
     p.add_argument("--price", type=float, default=None)
-    p.add_argument("--bull-growth-delta", type=float, default=0.03)
-    p.add_argument("--bear-growth-delta", type=float, default=-0.03)
-    p.add_argument("--bull-wacc-delta", type=float, default=-0.01)
-    p.add_argument("--bear-wacc-delta", type=float, default=0.01)
+    p.add_argument("--beta", type=float, default=None, help="beta to scale the WACC band")
+    p.add_argument("--growth-delta", type=float, default=None,
+                   help="bull/bear growth half-width (default: scaled to growth)")
+    p.add_argument("--wacc-delta", type=float, default=None,
+                   help="bull/bear WACC half-width (default: scaled to beta)")
     skillkit.run(main, p)

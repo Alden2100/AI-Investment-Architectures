@@ -731,9 +731,18 @@ def build_report(system: str, data: dict, out_path: str, subject: str = None) ->
     story += _commentary(rep)
 
     route = data.get("model_route") or "n/a"
+    model_id = data.get("model_id")
+    # Name the concrete model, never just the route, so a qwen run can't be read
+    # as a Claude run. Flag a degraded (qwen-stand-in) run prominently.
+    model_label = (f"{route} ({model_id})" if model_id else route)
+    degraded_note = ""
+    if data.get("degraded"):
+        degraded_note = ("  ⚠ DEGRADED: the qualitative narrative was produced by the "
+                         "local fallback model, not Claude — quality is capped and this "
+                         "is not analyst-grade. ")
     story += [Spacer(1, 8),
               Paragraph(f"All figures computed deterministically from SEC EDGAR (XBRL) &amp; "
-                        f"market data; qualitative narrative via model route “{route}”. "
-                        f"Free-data caveats apply — see limitations.", CAPTION)]
+                        f"market data; qualitative narrative via model {model_label}. "
+                        f"{degraded_note}Free-data caveats apply — see limitations.", CAPTION)]
     doc.build(story)
     return out_path

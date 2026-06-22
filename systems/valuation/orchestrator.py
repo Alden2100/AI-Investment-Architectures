@@ -60,7 +60,22 @@ def main(args):
 
     peers = [t] + [p.upper() for p in (args.peers or [])]
     comps = skillkit.call_skill("comps-builder", ["--tickers", *peers, "--target", t])
-    scen = skillkit.call_skill("scenario-analyzer", ["--ticker", t])
+    # Run scenarios off the SAME derived inputs as the DCF (growth, derived WACC, fade,
+    # base FCF, net debt, shares, beta) so the base scenario equals the DCF intrinsic and
+    # the bull/bear band is scaled to this company (beta + its own growth), not a flat ±3%.
+    _a = dcf.get("assumptions", {}) or {}
+    scen_args = ["--ticker", t]
+    for flag, key in (("--growth", "growth"), ("--discount-rate", "discount_rate"),
+                      ("--terminal-growth", "terminal_growth"), ("--base-fcf", "base_fcf"),
+                      ("--net-debt", "net_debt"), ("--shares", "shares")):
+        if isinstance(_a.get(key), (int, float)):
+            scen_args += [flag, repr(_a[key])]
+    if isinstance(_a.get("fade_years"), int):
+        scen_args += ["--fade-years", str(_a["fade_years"])]
+    _beta = (_a.get("wacc_components") or {}).get("beta")
+    if isinstance(_beta, (int, float)):
+        scen_args += ["--beta", repr(_beta)]
+    scen = skillkit.call_skill("scenario-analyzer", scen_args)
     fund = skillkit.call_skill("fundamentals-fetcher",
                                ["--ticker", t, "--items", "revenue", "net_income",
                                 "operating_income", "gross_profit"])
@@ -131,16 +146,22 @@ def main(args):
 
     instr = (
         "Give a buy/hold/sell call on this stock and explain it. Return keys "
-        "'recommendation' (buy/hold/sell), 'rationale' (2-3 sentences), and 'summary' "
-        "(one sentence). Compare the computed value_range to current_price; buy well "
-        "below the range, sell well above it. Use only these numbers.\n\n"
+        "'recommendation' (buy/hold/sell), 'rationale', and 'summary'. The 'rationale' "
+        "is a tight argument (3-6 sentences) that connects the DCF, comps, scenarios and "
+        "price to the call — not a list of numbers. Compare the value_range to "
+        "current_price (buy well below the range, sell well above it); reconcile where the "
+        "methods disagree and say which you weight and why; name the assumption that would "
+        "flip the call. The 'summary' is one decisive sentence. Ground every claim in the "
+        "figures below — do not invent numbers.\n\n"
         f"value_range: {json.dumps(value_range)}\n")
     KEYS = ("recommendation", "rationale", "summary")
     val, vfields = orch.synthesize_fields(
         instr + json.dumps(dossier, default=str), KEYS, task="reasoning", schema=VAL_SCHEMA,
-        max_tokens=1200, system="You are a valuation analyst. Decisive, brief.",
-        retry_prompt=instr + json.dumps({k: dossier[k] for k in ("current_price", "dcf_intrinsic", "scenarios")}, default=str),
-        retry_system="Valuation analyst. Output only the JSON object, all keys filled.")
+        max_tokens=3000,
+        system=orch.persona("valuation-analyst", audience="the investment committee"),
+        retry_prompt=instr + json.dumps({k: dossier[k] for k in
+            ("current_price", "dcf_intrinsic", "scenarios", "comps_implied", "reconciliation")}, default=str),
+        retry_system=orch.persona("valuation-analyst", audience="the investment committee", json_only=True))
     has = bool(vfields and any(vfields.values()))
     valuation = {"value_range": value_range,
                  "recommendation": vfields.get("recommendation") if has else None,
@@ -193,7 +214,7 @@ def main(args):
         loc = "above" if price > vr["high"] else "below" if price < vr["low"] else "within"
         bluf = (f"We rate {t} {rec}. At {_m(price)}, {t} trades {loc} our fair-value range of "
                 f"{_m(vr['low'])}–{_m(vr['high'])} (base {_m(vr['base'])}; DCF {pf(dossier['dcf_upside'])}). "
-                + (orch.text_field({"r": valuation.get("rationale")}, "r")[:240] if valuation.get("rationale") else
+                + (orch.text_field({"r": valuation.get("rationale")}, "r")[:600] if valuation.get("rationale") else
                    ("Bank/financial — DCF not applicable, so the call rests on relative multiples." if not dcf_ok else "")))
     else:
         bluf = summary
@@ -213,7 +234,7 @@ def main(args):
         "system": "valuation", "ticker": t, "current_price": price,
         "dossier": dossier,
         "valuation": valuation,
-        "model_route": val.get("_route", "none"),
+        **orch.model_meta(val),
         "report": report,
         "summary": summary,
     }

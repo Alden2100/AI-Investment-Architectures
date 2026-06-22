@@ -3,6 +3,12 @@
 
 Keyless: live free data + local qwen3.5:9b for the model steps.
     .venv/bin/python tests/run_smoke_tests.py
+
+NOTE: high-judgment routes now FAIL LOUD by default (no Claude session => no
+narrative). To keep exercising the keyless qwen path end-to-end, this runner
+opts into degraded mode (IM_ALLOW_DEGRADED=1) so the 9B model still narrates.
+That is exactly the "local testing only" use case the flag is for; real runs on
+a Max-plan `claude login` get the Claude narrative without it.
 """
 import os, subprocess, sys, time
 
@@ -15,11 +21,13 @@ def main():
     # ensure symlinks exist before running
     subprocess.run([sys.executable, os.path.join(REPO, "link.py")],
                    capture_output=True, text=True)
+    child_env = {**os.environ, "IM_ALLOW_DEGRADED": "1"}
     results = []
     for name in FULL:
         test = os.path.join(REPO, "systems", name, "tests", "smoke_test.py")
         t0 = time.time()
-        proc = subprocess.run([sys.executable, test], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, test], capture_output=True, text=True,
+                              env=child_env)
         dt = time.time() - t0
         ok = proc.returncode == 0
         results.append((name, ok, dt))

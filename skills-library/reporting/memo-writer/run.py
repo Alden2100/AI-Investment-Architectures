@@ -50,10 +50,21 @@ SCHEMA = {
 }
 
 SYSTEM = (
-    "You are an experienced portfolio manager writing a concise investment-committee "
-    "memo. Use only the data provided; do not invent figures. Quote any number exactly "
-    "as it appears in the inputs. Write each section crisply and decisively, and make a "
-    "clear recommendation."
+    "You are a senior analyst writing an investment-committee memo that a portfolio "
+    "manager will act on. This is client-grade work, not a summary.\n"
+    "- Lead with the verdict; the IC must know your call and the core reason immediately.\n"
+    "- Argue, don't list: tie every figure to what it IMPLIES for the thesis. A number "
+    "with no 'so what' does not belong in the memo. Make the sections cohere into one "
+    "connected argument — the thesis, financials, valuation, and risks should reinforce a "
+    "single view, not read as disconnected blurbs.\n"
+    "- Take a position. State where your read differs from the obvious/consensus one and "
+    "why. Name the one thing that would change your mind (in 'risks' or 'recommendation').\n"
+    "- Be specific and quantified; quote dollar and per-share figures EXACTLY as given. "
+    "Render ratios/margins/growth as percentages (a value like 0.3615 means 36.2%), never "
+    "as raw decimals.\n"
+    "- Ground everything in the data provided; do NOT invent figures, events, or quotes. "
+    "If a section lacks data, say what's missing rather than padding with generalities.\n"
+    "- No hedging filler, no marketing language, no restating the prompt."
 )
 
 REVENUE_TAGS = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
@@ -98,13 +109,23 @@ def main(args):
 
     prompt = (
         f"Company: {info['title']} ({info['ticker']}).\n\n{data_block}\n\n"
-        "Draft an investment-committee memo. Fill every memo_sections field "
-        "(thesis, business_overview, financials, valuation, risks, recommendation) "
-        "and a one-paragraph summary. Cite the figures above where relevant, quoted "
-        "exactly. Do not introduce numbers not present in the data."
+        "Draft an investment-committee memo. Fill every memo_sections field with a "
+        "substantive, well-argued passage:\n"
+        "- thesis: the call and the 2-3 pillars it rests on;\n"
+        "- business_overview: what the company does and how it makes money, only as it "
+        "bears on the thesis;\n"
+        "- financials: read the numbers — what the margins/growth/cash flow imply, not a "
+        "table in words;\n"
+        "- valuation: reconcile the DCF and comps, say what the market is pricing in, and "
+        "where you differ;\n"
+        "- risks: the real ways this thesis is wrong, plus the single fact that would "
+        "change your mind;\n"
+        "- recommendation: an unambiguous call (and rough conviction/size if supportable).\n"
+        "Then a one-paragraph IC-ready summary. Cite the figures above, quoted exactly. "
+        "Do not introduce numbers not present in the data."
     )
 
-    analysis = _route(prompt, task="drafting", system=SYSTEM, schema=SCHEMA, max_tokens=3000)
+    analysis = _route(prompt, task="drafting", system=SYSTEM, schema=SCHEMA, max_tokens=5000)
     meta = {
         "ticker": info["ticker"],
         "company": info["title"],

@@ -40,31 +40,54 @@ def build_memo(ticker):
     t = ticker.upper()
     dcf = skillkit.call_skill("dcf-valuation", ["--ticker", t])
     comps = skillkit.call_skill("comps-builder", ["--tickers", t, "--target", t])
+    scen = skillkit.call_skill("scenario-analyzer", ["--ticker", t])
     moat = skillkit.call_skill("moat-analyzer", ["--ticker", t])
     fund = skillkit.call_skill("fundamentals-fetcher",
                                ["--ticker", t, "--items", "revenue", "net_income",
-                                "operating_income"])
-    # Distill to a compact, high-signal block — the model writes a sharper memo from
-    # clean numbers than from four full raw skill dumps (and the 9B handles it keyless).
+                                "operating_income", "gross_profit", "operating_cash_flow",
+                                "free_cash_flow", "total_debt", "cash"])
+    # Feed the drafting model the REAL research material (drivers, peer table, scenario
+    # spread, full moat read), not just a handful of scalars — a memo argued from the
+    # actual evidence beats one written from three numbers. (Pre-digesting to scalars was
+    # the old keyless-9B compromise; the judgment layer now runs on Claude.)
+    scn = scen.get("scenarios", {})
     inputs = {
         "price": dcf.get("current_price"),
         "dcf_intrinsic_per_share": dcf.get("intrinsic_value_per_share"),
         "dcf_upside": dcf.get("upside_vs_price"),
+        "dcf_assumptions": dcf.get("assumptions"),
+        "scenarios": {k: (scn.get(k, {}) or {}).get("intrinsic_value_per_share")
+                      for k in ("bull", "base", "bear")},
         "comps_median": comps.get("median"),
-        "comps_implied_value": comps.get("target_value") or comps.get("implied_value"),
+        "comps_implied_value": comps.get("target_implied_value") or comps.get("target_value")
+        or comps.get("implied_value"),
+        "comps_table": comps.get("table", []),
         "margins": moat.get("margins"),
-        "moat_assessment": moat.get("assessment") if isinstance(moat.get("assessment"), str)
-        else (moat.get("summary") if isinstance(moat.get("summary"), str) else None),
+        "moat_assessment": (moat.get("assessment") if isinstance(moat.get("assessment"), str)
+                            else moat.get("summary") if isinstance(moat.get("summary"), str) else None),
+        "moat_type": moat.get("moat_type"),
+        "moat_durability": moat.get("durability") or moat.get("moat_durability"),
+        "competitive_quality": moat.get("quality"),
         "financials": fund.get("financials", {}),
     }
+    # Coherence ANCHOR (prevention): state the directional signal the numbers imply,
+    # so the memo's recommendation can't drift into contradicting its own DCF.
+    _up = inputs.get("dcf_upside")
+    _lean = orch.numeric_lean(dcf_upside=_up)
+    if _lean != "neutral":
+        _pf = f"{_up * 100:+.1f}%" if isinstance(_up, (int, float)) else "n/a"
+        inputs["valuation_signal"] = (
+            f"The numbers point {_lean.upper()}: DCF intrinsic vs price is {_pf}. "
+            "Your recommendation must be consistent with this unless you explicitly "
+            "argue, with evidence, why the DCF understates/overstates value.")
     fd, path = tempfile.mkstemp(suffix=".json", dir=DATA_DIR)
     with os.fdopen(fd, "w") as fh:
         json.dump(inputs, fh, default=str)
     memo = skillkit.call_skill("memo-writer", ["--ticker", t, "--input-file", path])
     os.unlink(path)
     inputs_used = ["dcf", "comps", "moat", "fundamentals"]  # the source skills distilled in
-    route = "claude" if memo.get("_source") == "api" else (
-        "local" if memo.get("_source") == "ollama" else "none")
+    route = memo.get("_route") or ("claude" if memo.get("_source") in ("api", "cli")
+                                   else "local" if memo.get("_source") == "ollama" else "none")
     # Be robust to the local 9B model's schema looseness: memo-writer merges model
     # fields into its result, so sections may arrive under `memo_sections`, flattened
     # at top level, or as raw `text`. Recover the draft however it came back.
@@ -81,6 +104,10 @@ def build_memo(ticker):
     import time as _t
     today = _t.strftime("%Y-%m-%d", _t.gmtime())
     rec = (sections.get("recommendation") if isinstance(sections, dict) else "") or ""
+    # Coherence CHECK (detection): flag if the recommendation prose directionally
+    # contradicts the DCF/price signal — the bug where a memo says OVERWEIGHT while its
+    # own DCF shows -50%. Surfaced in the output + Report Contract, never silently shipped.
+    coherence_warning = orch.coherence(orch.numeric_lean(dcf_upside=inputs.get("dcf_upside")), rec)
     med = inputs.get("comps_median") or {}
     pf = lambda x: f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
     money = lambda x: f"${float(x):,.2f}" if isinstance(x, (int, float)) else "n/a"
@@ -106,6 +133,8 @@ def build_memo(ticker):
     ]
     risks = [_first_sentence(sections.get("risks")) if isinstance(sections, dict) and sections.get("risks") else
              "See Risks section.", "Free-data limitations: single-year base, house DCF defaults, best-effort price."]
+    if coherence_warning:
+        risks.insert(0, "⚠ " + coherence_warning)
     falsifiers = [f"Thesis breaks if {t}'s earnings/FCF trajectory diverges from the DCF base case, or if it re-rates to peer multiples.",
                   "Re-run the memo on the next 10-K/10-Q."]
     report = orch.report(classification="IC", as_of={"prices": today, "financials": "latest annual"},
@@ -118,7 +147,8 @@ def build_memo(ticker):
         "memo_sections": sections,
         "draft_text": draft_text,
         "needs_model": needs,
-        "model_route": route,
+        "coherence_warning": coherence_warning or None,
+        **orch.model_meta(memo),
         "report": report,
         "summary": summary,
     }
@@ -139,8 +169,8 @@ def build_letter(args):
     if args.performance: largs += ["--performance", args.performance]
     if args.holdings:    largs += ["--holdings", *args.holdings]
     letter = skillkit.call_skill("letter-drafter", largs)
-    route = "claude" if letter.get("_source") == "api" else (
-        "local" if letter.get("_source") == "ollama" else "none")
+    route = letter.get("_route") or ("claude" if letter.get("_source") in ("api", "cli")
+                                     else "local" if letter.get("_source") == "ollama" else "none")
     draft = letter.get("letter_draft") or letter.get("text")
     needs = bool(letter.get("_needs_model")) or not draft
     summary = (letter.get("summary") if isinstance(letter.get("summary"), str) and letter.get("summary").strip()
@@ -150,7 +180,7 @@ def build_letter(args):
         "system": "reporting", "kind": "letter", "period": args.letter,
         "letter_draft": draft,
         "needs_model": needs,
-        "model_route": route,
+        **orch.model_meta(letter),
         "summary": summary,
     }
 

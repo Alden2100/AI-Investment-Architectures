@@ -115,29 +115,37 @@ def main(args):
             breaches.append({"type": "thesis_kpi", "detail": f"{t}: {name}"})
 
     prompt = (
-        "Triage each position green/yellow/red and write a one-sentence summary. "
-        "Return keys 'triage' (array of {ticker, status, note}) and 'summary'. "
-        "RULES (do not override): red = the position appears in `breaches` (hard "
-        "limit or thesis-KPI breach); yellow = drift past tolerance or weakening "
-        "KPI; green = within tolerance. Note is one short clause.\n\n"
+        "Triage each position green/yellow/red and write a summary. Return keys "
+        "'triage' (array of {ticker, status, note}) and 'summary'. RULES (do not "
+        "override): red = the position appears in `breaches` (hard limit or thesis-KPI "
+        "breach); yellow = drift past tolerance or weakening KPI; green = within "
+        "tolerance. Each 'note' must say WHAT is driving the status (cite the breach, "
+        "drift, correlation, or KPI by its number) and the action it implies — not a "
+        "generic label. The 'summary' states the book's overall risk posture and the "
+        "most urgent action. Ground every note in the data below.\n\n"
         f"positions: {json.dumps(positions)}\n"
         f"per_position: {json.dumps(per, default=str)}\n"
         f"drift: {json.dumps(drift, default=str)}\n"
         f"breaches: {json.dumps(breaches)}\n"
         f"correlation: HHI={corr.get('herfindahl_index')} avg_corr={corr.get('avg_pairwise_correlation')}"
     )
-    tri = orch.synthesize(prompt, task="judgment", schema=TRIAGE_SCHEMA, max_tokens=1500,
-                          system="You are a risk officer. Conservative, rules-first.")
+    tri_system = orch.persona("portfolio-risk-monitor",
+                              audience="the portfolio manager and the risk committee")
+    tri = orch.synthesize(prompt, task="judgment", schema=TRIAGE_SCHEMA, max_tokens=2500,
+                          system=tri_system)
     triage = tri.get("triage") or orch.first_list(tri)
     if not tri.get("_needs_model") and not triage:
         # tighter retry: just the tickers + which ones are in breach
         breached = sorted({b["detail"].split(":")[0].split()[0] for b in breaches if b.get("detail")})
         tri = orch.synthesize(
             "Return key 'triage': an array of {ticker, status, note}. status is red if the "
-            "ticker is in `breached`, else green. One short note each. Also a 'summary'.\n"
+            "ticker is in `breached`, else green. Each note says what drives the status. "
+            "Also a 'summary'.\n"
             f"tickers: {json.dumps(list(positions))}\nbreached: {json.dumps(breached)}",
-            task="judgment", schema=TRIAGE_SCHEMA, max_tokens=1000,
-            system="Risk officer. Output only the JSON object.")
+            task="judgment", schema=TRIAGE_SCHEMA, max_tokens=1500,
+            system=orch.persona("portfolio-risk-monitor",
+                                audience="the portfolio manager and the risk committee",
+                                json_only=True))
         triage = tri.get("triage") or orch.first_list(tri)
     summary = (orch.text_field(tri, "summary") if not tri.get("_needs_model")
                else f"Checked {len(positions)} positions; {len(breaches)} breach(es).")
@@ -217,7 +225,7 @@ def main(args):
         "thesis": thesis,
         "breaches": breaches,           # deterministic source of truth
         "triage": triage,               # model narration only
-        "model_route": tri.get("_route", "none"),
+        **orch.model_meta(tri),
         "report": report,
         "summary": summary or f"{len(breaches)} breach(es) across {len(positions)} positions.",
     }

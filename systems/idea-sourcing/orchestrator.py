@@ -76,12 +76,20 @@ def enrich(cands):
     tickers = [c["ticker"] for c in cands]
     flagged = skillkit.call_skill("catalyst-flagger", ["--tickers", *tickers, "--lookback", "30"])
     signal_counts = flagged.get("signal_counts", {})
+    # Keep the ACTUAL flagged catalyst objects ({type, date, confidence, rationale}),
+    # grouped per ticker — not just the count. The rationale is what lets the ranking
+    # model cite a real driver instead of a tautological "strong catalyst count".
+    catalysts_by = {}
+    for ev in (flagged.get("catalysts") or []):
+        if isinstance(ev, dict) and ev.get("ticker"):
+            catalysts_by.setdefault(ev["ticker"].upper(), []).append(ev)
     comps = skillkit.call_skill("comps-builder", ["--tickers", *tickers])
     comp_by = {r["ticker"]: r for r in comps.get("table", [])}
     for c in cands:
         news = skillkit.call_skill("news-fetcher", ["--ticker", c["ticker"], "--lookback", "30"])
         c["catalyst_signals"] = signal_counts.get(c["ticker"], {})
-        c["top_headlines"] = [i["title"] for i in news.get("items", [])[:4]]
+        c["catalysts"] = catalysts_by.get(c["ticker"].upper(), [])
+        c["top_headlines"] = [i["title"] for i in news.get("items", [])[:6]]
         dcf = skillkit.call_skill("dcf-valuation", ["--ticker", c["ticker"]])
         c["dcf_upside"] = dcf.get("upside_vs_price")
         c["intrinsic_value_per_share"] = dcf.get("intrinsic_value_per_share")
@@ -103,28 +111,47 @@ def main(args):
         return {"candidates": [], "summary": "No names matched the mandate."}
     comps_median = enrich(cands)
 
-    # compact, high-signal view of each candidate for the ranking model
-    slim = [{"ticker": c["ticker"], "dcf_upside": c.get("dcf_upside"),
-             "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"),
-             "catalysts": sum((c.get("catalyst_signals") or {}).values())
-             if isinstance(c.get("catalyst_signals"), dict) else 0,
-             "headlines": len(c.get("top_headlines") or [])} for c in cands]
+    # Content-rich view for the ranking model — the ACTUAL catalysts (type/date/
+    # rationale) and recent headlines, not counts, so each thesis can name a real
+    # driver. Trim catalyst rationales so the payload stays bounded.
+    def _cat(c):
+        out = []
+        for ev in (c.get("catalysts") or [])[:5]:
+            out.append({"type": ev.get("type"), "date": ev.get("date"),
+                        "confidence": ev.get("confidence"),
+                        "rationale": (ev.get("rationale") or "")[:240]})
+        return out
+    rich = [{"ticker": c["ticker"], "company": c.get("company"),
+             "market_cap": c.get("market_cap"),
+             "dcf_upside": c.get("dcf_upside"),
+             "intrinsic_value_per_share": c.get("intrinsic_value_per_share"),
+             "current_price": c.get("current_price"),
+             "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"), "ps": c.get("ps"),
+             "catalysts": _cat(c),
+             "recent_headlines": (c.get("top_headlines") or [])[:6]} for c in cands]
     instr = (
         "Rank these candidates into an investment shortlist. Return an object with "
         "exactly two keys: 'shortlist' (an array of {ticker, rank, thesis, verdict}) "
-        "and 'summary' (one sentence). Weigh mandate fit, catalyst strength, and "
-        "valuation upside (dcf_upside and cheapness vs comps_median). verdict is one of "
-        "pursue/watch/pass. Use only the numbers given.\n\n"
+        "and 'summary' (one sentence). Each candidate includes its ACTUAL flagged "
+        "catalysts (with rationale) and recent headlines — your 'thesis' must name a "
+        "specific driver (a real catalyst or headline) plus the valuation case "
+        "(dcf_upside, cheapness vs comps_median), NOT a count or a tautology. Weigh "
+        "mandate fit, catalyst strength, and valuation upside. verdict is one of "
+        "pursue/watch/pass. Ground every thesis in the figures and events given for "
+        "that name; do not invent.\n\n"
         f"comps_median: {json.dumps(comps_median)}\n")
-    ranked = orch.synthesize(instr + f"candidates: {json.dumps(slim, default=str)}",
-                             task="synthesis", schema=RANK_SCHEMA, max_tokens=1800,
-                             system="You are a disciplined buy-side analyst. Be terse and specific.")
+    rank_system = orch.persona("screening-analyst", audience="a portfolio manager deciding where to spend diligence time")
+    ranked = orch.synthesize(instr + f"candidates: {json.dumps(rich, default=str)}",
+                             task="synthesis", schema=RANK_SCHEMA, max_tokens=3500,
+                             system=rank_system)
     shortlist = ranked.get("shortlist") or orch.first_list(ranked)
     if not ranked.get("_needs_model") and not shortlist:
         ranked = orch.synthesize(
-            instr + f"candidates: {json.dumps([s['ticker'] for s in slim])}",
-            task="synthesis", schema=RANK_SCHEMA, max_tokens=1400,
-            system="Buy-side analyst. Output only the JSON object with 'shortlist' and 'summary'.")
+            instr + f"candidates: {json.dumps(rich, default=str)}",
+            task="synthesis", schema=RANK_SCHEMA, max_tokens=2500,
+            system=orch.persona("screening-analyst",
+                                 audience="a portfolio manager deciding where to spend diligence time",
+                                 json_only=True))
         shortlist = ranked.get("shortlist") or orch.first_list(ranked)
 
     # Backfill any candidate the model dropped, so every sourced name is represented
@@ -214,7 +241,7 @@ def main(args):
         "candidates": cands,
         "comps_median": comps_median,
         "shortlist": shortlist,
-        "model_route": ranked.get("_route", "none"),
+        **orch.model_meta(ranked),
         "report": report,
         "summary": summary,
     }
