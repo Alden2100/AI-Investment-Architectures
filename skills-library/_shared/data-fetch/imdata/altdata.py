@@ -46,6 +46,41 @@ def google_trends(query: str, *, force: bool = False) -> Optional[dict]:
     return out
 
 
+_NITTER_INSTANCES = ("https://nitter.net", "https://nitter.poast.org", "https://nitter.privacydev.net")
+
+
+def nitter_mentions(query: str, *, force: bool = False) -> Optional[dict]:
+    """Recent X/Twitter mentions for a query via Nitter (keyless, UNOFFICIAL). Nitter
+    instances are frequently rate-limited/offline, so this is best-effort and often
+    returns None — a sentiment overlay only, never decision-grade. Tier: keyless."""
+    key = f"nitter:{query.lower()}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_NEWS)
+        if cached is not None:
+            return cached or None
+    out = None
+    try:
+        import re
+        from urllib.parse import quote as _q
+        for base in _NITTER_INSTANCES:
+            try:
+                body = store.cached_get(f"{base}/search?f=tweets&q={_q(query)}",
+                                        ttl=config.TTL_NEWS,
+                                        headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+            except Exception:
+                continue
+            tweets = re.findall(r'class="tweet-content[^"]*"[^>]*>(.*?)</div>', body, re.DOTALL)
+            if tweets:
+                clean = [re.sub(r"<[^>]+>", " ", t).strip()[:160] for t in tweets[:8]]
+                out = {"query": query, "mentions": len(tweets), "sample": clean[:5],
+                       "instance": base, "source": "Nitter (X/Twitter, unofficial; sentiment only)"}
+                break
+    except Exception:
+        out = None
+    store.kv_put(key, out or {})
+    return out
+
+
 def reddit_mentions(query: str, *, subreddits="stocks+investing+wallstreetbets",
                     force: bool = False) -> Optional[dict]:
     """Recent mention volume for a query on investing subreddits. KEYED (PRAW): needs

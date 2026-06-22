@@ -31,10 +31,10 @@ SOURCES: dict = {
     "edgar_efts":      {"name": "SEC EDGAR full-text search",   "module": "edgar", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "edgar_rss":       {"name": "SEC EDGAR RSS/Atom alerts",    "module": "edgar", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "edgar_8k_ex991":  {"name": "8-K EX-99.1 earnings release", "module": "edgar", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
-    "edgar_bulk":      {"name": "SEC bulk data (num/tag/sub)",  "module": "bulk", "tier": PUBLIC, "requires_key": False, "status": "planned", "attribution": "U.S. SEC EDGAR"},
+    "edgar_bulk":      {"name": "SEC bulk data (num/tag/sub)",  "module": "bulk", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "form4":           {"name": "SEC Form 4 insider (XML)",     "module": "ownership", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "sched_13dg":      {"name": "SEC SC 13D/13G ownership",     "module": "ownership", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
-    "form_13f":        {"name": "SEC Form 13F institutional",   "module": "ownership", "tier": PUBLIC, "requires_key": False, "status": "planned", "attribution": "U.S. SEC EDGAR"},
+    "form_13f":        {"name": "SEC Form 13F institutional",   "module": "ownership", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "form_d_s1":       {"name": "SEC Form D / S-1 (private)",   "module": "forms", "tier": PUBLIC, "requires_key": False, "status": "planned", "attribution": "U.S. SEC EDGAR"},
 
     # --- Market data ---------------------------------------------------------
@@ -51,19 +51,19 @@ SOURCES: dict = {
     "damodaran":       {"name": "Damodaran datasets (ERP/beta/WACC)", "module": "valinputs", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "Aswath Damodaran, NYU Stern (pages.stern.nyu.edu)"},
     "segments":        {"name": "Segment KPIs (XBRL dimensional)", "module": "segments", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. SEC EDGAR"},
     "estimates_yf":    {"name": "Consensus estimates (yfinance)", "module": "estimates", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "Yahoo Finance via yfinance (unofficial)"},
-    "stockanalysis":   {"name": "stockanalysis.com estimates", "module": "estimates", "tier": KEYLESS, "requires_key": False, "status": "planned", "attribution": "stockanalysis.com (unofficial)"},
+    "stockanalysis":   {"name": "stockanalysis.com estimates", "module": "estimates", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "stockanalysis.com (unofficial)"},
     "fmp":             {"name": "Financial Modeling Prep",  "module": "fmp", "tier": KEY_EVAL, "requires_key": True, "env": "FMP_API_KEY", "status": "wired", "attribution": "Financial Modeling Prep"},
     "simfin":          {"name": "SimFin standardized stmts", "module": "fmp", "tier": KEY_EVAL, "requires_key": True, "env": "SIMFIN_API_KEY", "status": "wired", "attribution": "SimFin"},
-    "finviz":          {"name": "Finviz screener/key stats", "module": "universe", "tier": KEYLESS, "requires_key": False, "status": "planned", "attribution": "Finviz (unofficial)"},
-    "macrotrends":     {"name": "Macrotrends long history", "module": "valinputs", "tier": KEYLESS, "requires_key": False, "status": "planned", "attribution": "Macrotrends (unofficial)"},
+    "finviz":          {"name": "Finviz screener/key stats", "module": "finviz", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "Finviz (unofficial)"},
+    "macrotrends":     {"name": "Macrotrends long history", "module": "valinputs", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "Macrotrends (unofficial)"},
     "openbb":          {"name": "OpenBB SDK",               "module": "openbb", "tier": KEYLESS, "requires_key": False, "status": "planned", "attribution": "OpenBB (provider-dependent)"},
 
     # --- Macro ---------------------------------------------------------------
     "treasury":        {"name": "US Treasury yield curve",  "module": "macro", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. Department of the Treasury (public domain)"},
     "fred":            {"name": "FRED (St. Louis Fed)",     "module": "macro", "tier": PUBLIC, "requires_key": True, "env": "FRED_API_KEY", "status": "wired", "attribution": "Federal Reserve Bank of St. Louis (FRED); avoid 3rd-party S&P series"},
-    "bls":             {"name": "BLS (CPI/PPI/jobs)",       "module": "macro", "tier": PUBLIC, "requires_key": True, "env": "BLS_API_KEY", "status": "planned", "attribution": "U.S. Bureau of Labor Statistics"},
+    "bls":             {"name": "BLS (CPI/PPI/jobs)",       "module": "macro", "tier": PUBLIC, "requires_key": True, "env": "BLS_API_KEY", "status": "wired", "attribution": "U.S. Bureau of Labor Statistics"},
     "world_bank":      {"name": "World Bank",               "module": "macro", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "World Bank Open Data"},
-    "ecb":             {"name": "ECB SDW",                  "module": "macro", "tier": PUBLIC, "requires_key": False, "status": "planned", "attribution": "European Central Bank"},
+    "ecb":             {"name": "ECB SDW",                  "module": "macro", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "European Central Bank"},
     "cftc_cot":        {"name": "CFTC Commitments of Traders", "module": "macro", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. CFTC"},
 
     # --- News & alt-data -----------------------------------------------------
@@ -73,7 +73,7 @@ SOURCES: dict = {
     "gnews":           {"name": "GNews",                    "module": "news", "tier": KEY_EVAL, "requires_key": True, "env": "GNEWS_KEY", "status": "wired", "attribution": "GNews"},
     "reddit":          {"name": "Reddit (PRAW)",            "module": "altdata", "tier": KEY_EVAL, "requires_key": True, "env": "REDDIT_CLIENT_ID", "status": "wired", "attribution": "Reddit API"},
     "pytrends":        {"name": "Google Trends (pytrends)", "module": "altdata", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "Google Trends (unofficial)"},
-    "twitter_nitter":  {"name": "Twitter/X via Nitter",     "module": "altdata", "tier": KEYLESS, "requires_key": False, "status": "planned", "attribution": "X/Twitter via Nitter (unofficial)"},
+    "twitter_nitter":  {"name": "Twitter/X via Nitter",     "module": "altdata", "tier": KEYLESS, "requires_key": False, "status": "wired", "attribution": "X/Twitter via Nitter (unofficial)"},
 
     # --- Governance ----------------------------------------------------------
     "ofac_sdn":        {"name": "OFAC SDN list",            "module": "sanctions", "tier": PUBLIC, "requires_key": False, "status": "wired", "attribution": "U.S. Treasury OFAC (public)"},

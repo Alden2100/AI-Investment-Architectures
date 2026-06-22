@@ -208,6 +208,33 @@ def data_quality(ticker: str, *, used_price=None, computed_mcap=None) -> list:
     return flags
 
 
+def stockanalysis_estimates(ticker: str, *, force: bool = False) -> dict:
+    """Forward EPS/revenue estimates from stockanalysis.com (keyless, UNOFFICIAL —
+    a fallback for the yfinance consensus). Best-effort: returns {} if the endpoint
+    shape changes or is blocked. Tier: keyless_unofficial (dev-only for client work)."""
+    key = f"stockanalysis:{ticker.upper()}"
+    if not force:
+        cached = store.kv_get(key, ttl=_TTL)
+        if cached is not None:
+            return cached
+    out = {}
+    try:
+        url = f"https://stockanalysis.com/api/symbol/s/{ticker.upper()}/overview"
+        data = store.cached_get_json(
+            url, ttl=_TTL, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=20, force=force)
+        d = (data or {}).get("data") or {}
+        out = {k: d.get(k) for k in ("epsThisYear", "epsNextYear", "epsGrowthNext5Y",
+                                     "revenueThisYear", "peForward", "targetPrice")
+               if d.get(k) is not None}
+        if out:
+            out["source"] = "stockanalysis.com (unofficial)"
+    except Exception:
+        out = {}
+    store.kv_put(key, out)
+    return out
+
+
 def consensus_growth(cons: dict) -> Optional[float]:
     """Pull the next-FY consensus revenue growth (a clean number to differentiate a
     DCF growth assumption against), as a decimal. None if unavailable."""

@@ -105,12 +105,33 @@ def test_new_modules():
     soft(f"World Bank GDP fetched ({(wb or {}).get('value')})", wb is None or "value" in wb)
 
 
+def test_final8():
+    print("\nFinal 8 sources (BLS/ECB/13F/Finviz/bulk + fragile scrapes):")
+    from imdata import macro, ownership, finviz, bulk, estimates, valinputs, altdata
+    bls = macro.bls_series()
+    soft(f"BLS CPI ({(bls or {}).get('value')})", bls is None or "value" in bls)
+    ecb = macro.ecb_series()
+    soft(f"ECB rate ({(ecb or {}).get('value')})", ecb is None or "value" in ecb)
+    inst = ownership.institutional_holders("MSFT")
+    hard("institutional_holders returns dict w/ top_holders", isinstance(inst.get("top_holders"), list))
+    soft(f"13F holders found ({len(inst.get('top_holders') or [])})", len(inst.get("top_holders") or []) >= 1)
+    hard("finviz.key_stats returns a dict", isinstance(finviz.key_stats("MSFT"), dict))
+    hard("finviz.screen returns a list", isinstance(finviz.screen({"Sector": "Technology"}, limit=5), list))
+    hard("bulk.available returns dict", isinstance(bulk.available(), dict))
+    # the three fragile scrapes must return the right TYPE without raising (empty ok)
+    hard("stockanalysis returns dict", isinstance(estimates.stockanalysis_estimates("MSFT"), dict))
+    hard("macrotrends returns list", isinstance(valinputs.macrotrends_history("MSFT", "microsoft"), list))
+    hard("nitter returns dict-or-None", altdata.nitter_mentions("MSFT") is None
+         or isinstance(altdata.nitter_mentions("MSFT"), dict))
+
+
 if __name__ == "__main__":
     test_registry()
     test_commercial_gating()
     test_valinputs()
     test_macro()
     test_new_modules()
+    test_final8()
     n = sum(_hard)
     print(f"\n{n}/{len(_hard)} hard checks passed")
     sys.exit(0 if all(_hard) else 1)

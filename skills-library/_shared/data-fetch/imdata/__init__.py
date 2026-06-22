@@ -6,8 +6,8 @@ in SQLite via `store`.
 """
 from . import (config, store, universe, edgar, prices, news, estimates,  # noqa: F401
                articles, sources, macro, valinputs, ownership, sanctions,
-               segments, volatility, fmp, altdata)
+               segments, volatility, fmp, altdata, finviz, bulk)
 
 __all__ = ["config", "store", "universe", "edgar", "prices", "news", "estimates",
            "articles", "sources", "macro", "valinputs", "ownership", "sanctions",
-           "segments", "volatility", "fmp", "altdata"]
+           "segments", "volatility", "fmp", "altdata", "finviz", "bulk"]

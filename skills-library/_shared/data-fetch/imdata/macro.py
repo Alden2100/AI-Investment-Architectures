@@ -173,6 +173,69 @@ def cot_positioning(market: str = "S&P 500", *, force: bool = False) -> Optional
     return out
 
 
+def bls_series(series_id: str = "CUUR0000SA0", *, force: bool = False) -> Optional[dict]:
+    """Latest BLS observation (default = CPI-U, all items) + YoY. Public; the keyless
+    v1 endpoint works (low daily limit), BLS_API_KEY raises the limit via v2."""
+    import os
+    key = f"bls:{series_id}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_MACRO)
+        if cached is not None:
+            return cached or None
+    out = None
+    api = os.environ.get("BLS_API_KEY")
+    ver = "v2" if api else "v1"
+    url = f"https://api.bls.gov/publicAPI/{ver}/timeseries/data/{series_id}"
+    if api:
+        url += f"?registrationkey={api}"
+    try:
+        data = store.cached_get_json(url, ttl=config.TTL_MACRO,
+                                     headers={"User-Agent": config.SEC_USER_AGENT}, timeout=30, force=force)
+        ser = (data.get("Results", {}).get("series") or [])
+        pts = ser[0].get("data") if ser else []
+        if pts:
+            latest = pts[0]
+            yago = next((p for p in pts if p.get("year") == str(int(latest["year"]) - 1)
+                         and p.get("period") == latest.get("period")), None)
+            v = float(latest["value"])
+            yoy = round((v / float(yago["value"]) - 1) * 100, 2) if yago and float(yago["value"]) else None
+            out = {"series": series_id, "value": v, "yoy_pct": yoy,
+                   "period": f"{latest.get('periodName')} {latest.get('year')}", "source": "bls"}
+    except Exception:
+        out = None
+    store.kv_put(key, out or {})
+    return out
+
+
+def ecb_series(flow: str = "FM", series_key: str = "B.U2.EUR.4F.KR.MRR_FR.LEV",
+               *, force: bool = False) -> Optional[dict]:
+    """Latest ECB SDW observation (default = main refinancing rate). Keyless, public.
+    CSV format is parsed for robustness."""
+    import csv
+    import io
+    key = f"ecb:{flow}:{series_key}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_MACRO)
+        if cached is not None:
+            return cached or None
+    out = None
+    try:
+        url = (f"https://data-api.ecb.europa.eu/service/data/{flow}/{series_key}"
+               "?lastNObservations=1&format=csvdata")
+        body = store.cached_get(url, ttl=config.TTL_MACRO,
+                                headers={"User-Agent": config.SEC_USER_AGENT}, timeout=30, force=force)
+        rows = list(csv.DictReader(io.StringIO(body)))
+        if rows:
+            r = rows[-1]
+            val = r.get("OBS_VALUE")
+            out = {"series": series_key, "value": float(val) if val else None,
+                   "as_of": r.get("TIME_PERIOD"), "source": "ecb"}
+    except Exception:
+        out = None
+    store.kv_put(key, out or {})
+    return out
+
+
 def snapshot(*, force: bool = False) -> dict:
     """Compact macro backdrop for portfolio/reporting overlays. Best-effort."""
     out = {"risk_free_10y": risk_free_rate("10y", force=force),

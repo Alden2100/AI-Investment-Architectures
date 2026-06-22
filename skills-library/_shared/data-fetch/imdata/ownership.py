@@ -140,6 +140,39 @@ def beneficial_ownership_filings(ticker: str, *, limit: int = 10) -> list:
     return out[:limit]
 
 
+def institutional_holders(ticker: str, *, limit: int = 10, force: bool = False) -> dict:
+    """Top institutional holders (the 13F by-STOCK view). Form 13F is filed by manager,
+    so the clean by-stock aggregation comes from yfinance (which aggregates 13F data);
+    the authoritative SEC path is the DERA 13F bulk datasets (planned, bulk.py)."""
+    key = f"inst:{ticker.upper()}:{limit}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_OWNERSHIP)
+        if cached is not None:
+            return cached
+    out = {"top_holders": [], "pct_institutions": None}
+    try:
+        import yfinance as yf  # lazy
+        t = yf.Ticker(ticker.upper())
+        df = t.institutional_holders
+        if df is not None and not getattr(df, "empty", True):
+            for rec in df.head(limit).to_dict("records"):
+                out["top_holders"].append({
+                    "holder": rec.get("Holder"),
+                    "shares": int(rec["Shares"]) if rec.get("Shares") == rec.get("Shares") else None,
+                    "pct_out": round(float(rec["pctHeld"]) * 100, 2) if rec.get("pctHeld") == rec.get("pctHeld") else None,
+                })
+        try:
+            info = t.info or {}
+            out["pct_institutions"] = (round(info["heldPercentInstitutions"] * 100, 1)
+                                       if info.get("heldPercentInstitutions") else None)
+        except Exception:
+            pass
+    except Exception:
+        out = {"top_holders": [], "pct_institutions": None}
+    store.kv_put(key, out)
+    return out
+
+
 def short_interest(ticker: str) -> dict:
     """Short interest. Sourced from yfinance (in `estimates`); FINRA's bi-monthly
     consolidated file is the authoritative upgrade (planned)."""

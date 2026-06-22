@@ -74,5 +74,38 @@ def cost_of_equity(beta: float, *, risk_free: float = None) -> Optional[float]:
     return round(rf + beta * (erp if erp is not None else 0.046), 5)
 
 
+def macrotrends_history(ticker: str, slug: str, metric: str = "revenue",
+                        *, force: bool = False) -> list:
+    """Long-history annual series (e.g. revenue) from macrotrends.net (keyless,
+    UNOFFICIAL — a sanity-check on old periods). `slug` is the company name segment in
+    the macrotrends URL (e.g. 'microsoft'). Best-effort: returns [] if the page layout
+    changes. Tier: keyless_unofficial (dev-only for client work)."""
+    import re
+    import json as _json
+    key = f"macrotrends:{ticker.upper()}:{metric}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_DAMODARAN)
+        if cached is not None:
+            return cached
+    out = []
+    try:
+        url = f"https://www.macrotrends.net/stocks/charts/{ticker.upper()}/{slug}/{metric}"
+        body = store.cached_get(url, ttl=config.TTL_DAMODARAN,
+                                headers={"User-Agent": "Mozilla/5.0"}, timeout=30, force=force)
+        m = re.search(r"var\s+chartData\s*=\s*(\[.*?\]);", body, re.DOTALL)
+        if m:
+            for row in _json.loads(m.group(1)):
+                val = row.get("v1") or row.get("v2")
+                if row.get("date") and val not in (None, ""):
+                    try:
+                        out.append({"date": row["date"], "value": float(val)})
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        out = []
+    store.kv_put(key, out)
+    return out[-12:]
+
+
 def attribution() -> str:
     return "Aswath Damodaran, NYU Stern (pages.stern.nyu.edu)"
