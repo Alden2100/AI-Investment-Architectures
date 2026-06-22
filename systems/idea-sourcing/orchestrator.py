@@ -174,8 +174,11 @@ def main(args):
         "candidate has non-empty 'data_flags', explicitly CAVEAT that name's numbers as "
         "possibly unreliable and lower your confidence. verdict is a screening priority — "
         "one of pursue/watch/pass — not a recommendation. Ground every thesis in the "
-        "figures and events given; do not invent.\n\n"
-        f"comps_median: {json.dumps(comps_median)}\n")
+        "figures and events given; do not invent.\n"
+        + (f"INVESTOR TILT: the user is screening with a '{args.theme}' objective — weight the "
+           "ranking toward names that fit that tilt and say in each thesis why it does or "
+           "doesn't fit.\n" if getattr(args, "theme", None) else "")
+        + f"\ncomps_median: {json.dumps(comps_median)}\n")
     rank_system = orch.persona("screening-analyst", audience="a portfolio manager deciding where to spend diligence time")
     ranked = orch.synthesize(instr + f"candidates: {json.dumps(rich, default=str)}",
                              task="synthesis", schema=RANK_SCHEMA, max_tokens=3500,
@@ -307,5 +310,6 @@ if __name__ == "__main__":
     p.add_argument("--sic-contains", default=None)
     p.add_argument("--min-mcap", default=None)
     p.add_argument("--max-mcap", default=None)
+    p.add_argument("--theme", default=None, help="qualitative tilt, e.g. 'growth value'")
     p.add_argument("--max-candidates", default="6")
     skillkit.run(main, p)

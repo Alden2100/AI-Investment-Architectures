@@ -77,11 +77,28 @@ ALIASES = {
 SECTORS = {
     "software": "software", "semiconductor": "semiconductor",
     "semiconductors": "semiconductor", "chip": "semiconductor", "chips": "semiconductor",
-    "bank": "bank", "banks": "bank", "pharma": "pharmaceutical",
-    "pharmaceutical": "pharmaceutical", "biotech": "biological", "retail": "retail",
-    "oil": "petroleum", "energy": "petroleum", "auto": "motor vehicle",
-    "automotive": "motor vehicle", "aerospace": "aircraft", "airline": "air transportation",
-    "insurance": "insurance", "media": "television", "telecom": "telephone",
+    "bank": "bank", "banks": "bank", "banking": "bank", "pharma": "pharmaceutical",
+    "pharmaceutical": "pharmaceutical", "pharmaceuticals": "pharmaceutical",
+    "biotech": "biological", "biotechnology": "biological", "retail": "retail",
+    "retailer": "retail", "retailers": "retail",
+    "oil": "petroleum", "energy": "petroleum", "petroleum": "petroleum",
+    "auto": "motor vehicle", "automotive": "motor vehicle", "automaker": "motor vehicle",
+    "aerospace": "aircraft", "airline": "air transportation", "airlines": "air transportation",
+    "insurance": "insurance", "insurer": "insurance", "media": "television",
+    "telecom": "telephone", "telecommunications": "telephone",
+    # widened coverage
+    "beverage": "beverage", "beverages": "beverage", "drink": "beverage", "drinks": "beverage",
+    "food": "food", "restaurant": "eating", "restaurants": "eating", "dining": "eating",
+    "apparel": "apparel", "clothing": "apparel", "hotel": "hotel", "hotels": "hotel",
+    "hospitality": "hotel", "tobacco": "tobacco", "chemical": "chemical", "chemicals": "chemical",
+    "mining": "mining", "gold": "gold", "steel": "steel", "real estate": "real estate",
+    "reit": "real estate", "utility": "electric", "utilities": "electric",
+    "machinery": "machinery", "agriculture": "agricultural",
+    "healthcare": "health", "health care": "health", "health": "health",
+    "medical": "health", "hospital": "health", "medical device": "surgical",
+    "electric vehicle": "motor vehicle", "electric vehicles": "motor vehicle",
+    "ev maker": "motor vehicle", "ev makers": "motor vehicle", "carmaker": "motor vehicle",
+    "industrial": "machinery", "industrials": "machinery", "tobacco products": "tobacco",
 }
 _STOP = {"A", "I", "THE", "IS", "IT", "MY", "ME", "AN", "OK", "OR", "TO", "VS",
          "AND", "FOR", "ANY", "ARE", "DCF", "IC", "LP", "WHAT", "HOW", "DO",
@@ -198,9 +215,12 @@ def extract_mcap(text: str):
     low = text.lower()
     if "large-cap" in low or "large cap" in low or "megacap" in low or "mega-cap" in low:
         return "1e10", None
-    if "mid-cap" in low or "mid cap" in low:
+    if ("mid-cap" in low or "mid cap" in low or "mid-market" in low or "mid market" in low
+            or "middle market" in low or "midcap" in low):
         return "2e9", "2e10"
-    if "small-cap" in low or "small cap" in low:
+    if "micro-cap" in low or "micro cap" in low or "microcap" in low:
+        return None, "3e8"
+    if "small-cap" in low or "small cap" in low or "smid" in low:
         return None, "2e9"
     m = re.search(r"\$?\s*(\d+(?:\.\d+)?)\s*(t|tn|trillion|b|bn|billion|m|mm|million)\b", low)
     if m:
@@ -222,11 +242,26 @@ def heuristic_system(text: str):
     # in the old pattern wouldn't match "10-Ks" (no boundary between K and s).
     if re.search(r"\b(10[\s-]?[kq]s?|8[\s-]?ks?|filings?|annual reports?|"
                  r"quarterly reports?|annual filings?|latest 10|prior 10)\b", t): add("filing-intelligence", 3)
-    if re.search(r"\b(catalyst|catalysts|screen|ideas|shortlist|names|sourcing|watchlist)\b", t): add("idea-sourcing", 3)
+    if re.search(r"\b(catalyst|catalysts|screen|screening|ideas?|shortlist|names|sourcing|"
+                 r"watchlist|invest in|investing in|opportunit\w+|plays?|candidates?)\b", t): add("idea-sourcing", 3)
     if re.search(r"\b(portfolio|book|positions?|limits?|drift|rebalance|exposure|concentration|risk limit)\b", t): add("portfolio-monitoring", 3)
     if re.search(r"\bdue diligence|deep dive|full work-?up\b", t): add("due-diligence", 2)
     if re.search(r"\baudit|governance|compliance|paper trail\b", t): add("governance-audit", 2)
     if "%" in t and re.search(r"\b[A-Za-z]{1,5}\b\s*\d+\s*%", text): add("portfolio-monitoring", 2)
+    # A sector and/or size band (without a specific subject company) is a SCREEN —
+    # nudge toward idea-sourcing so "mid-cap beverage companies" doesn't dead-end.
+    _lo, _hi = extract_mcap(text)
+    _has_sector = any(re.search(rf"\b{re.escape(kw)}\b", t) for kw in SECTORS)
+    if (_lo or _hi) and _has_sector:
+        add("idea-sourcing", 3)
+    elif (_lo or _hi) or _has_sector:
+        add("idea-sourcing", 2)
+    # A discovery verb alongside a sector/size is unambiguously a screen
+    # ("find EV makers", "best beverage companies", "top healthcare names").
+    if (_has_sector or _lo or _hi) and re.search(
+            r"\b(find|show|list|screen|best|top|recommend|suggest|looking for|"
+            r"give me|makers?|companies|firms?|stocks?)\b", t):
+        add("idea-sourcing", 3)
     best = max(score, key=score.get)
     return (best, score[best]) if score[best] > 0 else (None, 0)
 
@@ -250,9 +285,136 @@ def classify(text: str) -> tuple:
     return sysname or "idea-sourcing", "fallback"
 
 
-def build_argv(system: str, text: str) -> tuple:
-    """Return (argv_list, missing_msg_or_None) for the chosen system."""
+# --------------------------------------------------------------------------- #
+# Layer 2 — structured ENTITY extraction (slot-filling), not routing.
+#
+# Deterministic extractors run first (fast, exact, validated). When they leave the
+# chosen system under-specified, ONE tiny local-Qwen call slot-fills the mandate
+# from natural language — the model never touches routing or execution, it only
+# fills {tickers, sector, size, form, qualitative}, which build_argv maps to flags.
+# --------------------------------------------------------------------------- #
+_SLOT_SCHEMA = {"type": "object", "properties": {
+    "tickers": {"type": "array", "items": {"type": "string"}},
+    "sector": {"type": "string"},
+    "size": {"type": "string"},
+    "form": {"type": "string"},
+    "qualitative": {"type": "array", "items": {"type": "string"}},
+}}
+_QUAL_RE = re.compile(r"\b(growth|value|undervalued|dividends?|income|profitab\w+|"
+                      r"cheap|quality|momentum|turnaround|moats?|cash[\s-]?flow|defensive)\b", re.I)
+
+
+def model_slots(text: str) -> dict:
+    """One small local-Qwen structured-extraction call. Entities only; {} on failure."""
+    try:
+        res = route(
+            "Extract investment-mandate fields from the request. Output JSON only.\n"
+            "- tickers: stock symbols ONLY if specific companies are explicitly named, else [].\n"
+            "- sector: ONE lowercase industry word (e.g. beverage, software, healthcare, gold) or \"\".\n"
+            "- size: one of small-cap, mid-cap, large-cap, mega-cap, or \"\".\n"
+            "- form: one of 10-K, 10-Q, 8-K, or \"\".\n"
+            "- qualitative: qualities requested (e.g. growth, value, dividend), or [].\n\n"
+            f"Request: {text!r}",
+            task="extraction",
+            system="You convert an investment request into structured mandate fields. JSON only.",
+            schema=_SLOT_SCHEMA, max_tokens=300)
+        return res if isinstance(res, dict) else {}
+    except Exception:
+        return {}
+
+
+def _size_to_band(size):
+    s = (size or "").lower().strip().replace("_", "-")
+    return {"mega-cap": ("5e10", None), "mega": ("5e10", None),
+            "large-cap": ("1e10", None), "large": ("1e10", None),
+            "mid-cap": ("2e9", "2e10"), "mid": ("2e9", "2e10"),
+            "middle market": ("2e9", "2e10"), "mid-market": ("2e9", "2e10"),
+            "small-cap": (None, "2e9"), "small": (None, "2e9"),
+            "micro-cap": (None, "3e8"), "micro": (None, "3e8")}.get(s, (None, None))
+
+
+def _sector_to_sic(word):
+    w = (word or "").lower().strip()
+    return (SECTORS.get(w, w) or None) if w else None
+
+
+def _det_sector(text):
+    for kw, sic in SECTORS.items():
+        if re.search(rf"\b{re.escape(kw)}\b", text, re.I):
+            return sic
+    return None
+
+
+def _norm_form(s):
+    s = (s or "").lower().replace(" ", "")
+    if "10-q" in s or "10q" in s: return "10-Q"
+    if "8-k" in s or "8k" in s: return "8-K"
+    if "10-k" in s or "10k" in s: return "10-K"
+    return None
+
+
+def _det_form(text):
+    return "10-Q" if re.search(r"10[\s-]?q", text, re.I) else (
+        "8-K" if re.search(r"8[\s-]?k", text, re.I) else "10-K")
+
+
+_KNOWN_QUALS = {"growth", "value", "undervalued", "dividend", "income", "profitable",
+                "cheap", "quality", "momentum", "turnaround", "moat", "cash-flow", "defensive"}
+
+
+def _quals(text, extra=None):
+    qs = {m.group(1).lower().replace(" ", "-") for m in _QUAL_RE.finditer(text)}
+    # Model-supplied quals are kept only if they're real (in the known vocabulary or
+    # actually present in the text) — never trust a hallucinated tag.
+    low = text.lower()
+    for q in (extra or []):
+        q = str(q).lower().strip().replace(" ", "-")
+        if q and (q in _KNOWN_QUALS or q in low):
+            qs.add(q)
+    return sorted(qs)
+
+
+def resolve_mandate(system: str, text: str) -> dict:
+    """Deterministic extraction first, then a single Qwen slot-fill IF the chosen
+    system is still under-specified. Returns a structured mandate dict."""
     tickers = extract_tickers(text)
+    positions = extract_positions(text)
+    sector_sic = _det_sector(text)
+    lo, hi = extract_mcap(text)
+    form = None
+    quals = _quals(text)
+
+    needs_ticker = system in ("valuation", "filing-intelligence", "reporting", "due-diligence") \
+        and not (system == "reporting" and re.search(r"\bletter\b", text, re.I))
+    # A size band alone is too broad to be a useful screen, so for idea-sourcing we
+    # slot-fill whenever there's no explicit ticker AND no sector yet (recovers a
+    # sector the keyword table missed, e.g. "healthcare", "electric vehicle").
+    under = ((needs_ticker and not tickers)
+             or (system == "portfolio-monitoring" and not positions)
+             or (system == "idea-sourcing" and not (tickers or sector_sic)))
+
+    if under:
+        m = model_slots(text)
+        for tk in (m.get("tickers") or []):
+            tk = str(tk).upper().strip()
+            if tk and tk not in tickers and valid_ticker(tk):
+                tickers.append(tk)
+        if not sector_sic:
+            sector_sic = _sector_to_sic(m.get("sector"))
+        if not (lo or hi):
+            lo, hi = _size_to_band(m.get("size"))
+        form = _norm_form(m.get("form"))
+        quals = _quals(text, m.get("qualitative"))
+
+    return {"tickers": tickers, "positions": positions, "sector_sic": sector_sic,
+            "min_mcap": lo, "max_mcap": hi, "form": form, "quals": quals}
+
+
+def build_argv(system: str, text: str) -> tuple:
+    """Return (argv_list, missing_msg_or_None) for the chosen system, from a mandate
+    resolved deterministically + (if needed) one local-Qwen slot-fill."""
+    m = resolve_mandate(system, text)
+    tickers, positions = m["tickers"], m["positions"]
     if system == "valuation":
         if not tickers:
             return None, "Which company? e.g. \"what's MSFT worth vs AAPL\""
@@ -263,19 +425,16 @@ def build_argv(system: str, text: str) -> tuple:
     if system == "filing-intelligence":
         if not tickers:
             return None, "Which company's filing? e.g. \"what changed in KO's 10-K\""
-        form = "10-Q" if re.search(r"10-?q", text, re.I) else (
-            "8-K" if re.search(r"8-?k", text, re.I) else "10-K")
-        return ["--ticker", tickers[0], "--form", form], None
+        return ["--ticker", tickers[0], "--form", m["form"] or _det_form(text)], None
     if system == "portfolio-monitoring":
-        positions = extract_positions(text)
         if not positions:
             return None, ("List positions with weights, e.g. "
                           "\"NVDA 30%, MSFT 20%, cap 10%\"")
         argv = ["--positions", *positions]
-        m = re.search(r"cap\s*(\d+(?:\.\d+)?)\s*%", text, re.I) or \
+        cm = re.search(r"cap\s*(\d+(?:\.\d+)?)\s*%", text, re.I) or \
             re.search(r"max[-\s]?weight\s*(\d+(?:\.\d+)?)\s*%?", text, re.I)
-        if m:
-            w = float(m.group(1)); argv += ["--max-weight", f"{w/100 if w > 1 else w:g}"]
+        if cm:
+            w = float(cm.group(1)); argv += ["--max-weight", f"{w/100 if w > 1 else w:g}"]
         return argv, None
     if system == "reporting":
         if re.search(r"\bletter\b", text, re.I):
@@ -294,12 +453,14 @@ def build_argv(system: str, text: str) -> tuple:
         argv = []
         if tickers:
             argv += ["--ticker-in", *tickers]
-        for kw, sic in SECTORS.items():
-            if re.search(rf"\b{kw}\b", text, re.I):
-                argv += ["--sic-contains", sic]; break
-        lo, hi = extract_mcap(text)
-        if lo: argv += ["--min-mcap", lo]
-        if hi: argv += ["--max-mcap", hi]
+        if m["sector_sic"]:
+            argv += ["--sic-contains", m["sector_sic"]]
+        if m["min_mcap"]:
+            argv += ["--min-mcap", m["min_mcap"]]
+        if m["max_mcap"]:
+            argv += ["--max-mcap", m["max_mcap"]]
+        if m["quals"]:
+            argv += ["--theme", " ".join(m["quals"])[:120]]
         if not argv:
             return None, ("Give a mandate: a sector (\"software\"), size "
                           "(\"large-cap\"), or some tickers.")
