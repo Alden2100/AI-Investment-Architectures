@@ -204,6 +204,33 @@ def cached_get_json(url: str, **kwargs) -> Any:
 
 
 # --------------------------------------------------------------------------- #
+# Generic key/value cache (reuses http_cache so no schema migration needed).
+# For vendor data fetched by a library rather than a raw GET (e.g. yfinance) —
+# cache the extracted JSON with a TTL so repeat calls in a run are cheap.
+# --------------------------------------------------------------------------- #
+def kv_get(key: str, *, ttl: int) -> Any:
+    """Return the cached JSON value for `key` if fresh, else None."""
+    row = get_conn().execute(
+        "SELECT body, fetched_at FROM http_cache WHERE url = ?", (f"kv://{key}",)
+    ).fetchone()
+    if row is not None and (time.time() - row["fetched_at"]) < ttl:
+        try:
+            return json.loads(row["body"])
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def kv_put(key: str, value: Any) -> None:
+    with _tx() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO http_cache (url, body, status, fetched_at) "
+            "VALUES (?, ?, ?, ?)",
+            (f"kv://{key}", json.dumps(value, default=str), 200, time.time()),
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Companies / universe
 # --------------------------------------------------------------------------- #
 def upsert_companies(rows: Iterable[dict]) -> None:

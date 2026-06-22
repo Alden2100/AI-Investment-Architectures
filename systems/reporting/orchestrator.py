@@ -32,7 +32,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit                         # noqa: E402
+from imdata import skillkit, estimates              # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 
@@ -69,6 +69,10 @@ def build_memo(ticker):
         "moat_durability": moat.get("durability") or moat.get("moat_durability"),
         "competitive_quality": moat.get("quality"),
         "financials": fund.get("financials", {}),
+        # Street consensus + ownership (free, yfinance) so the memo can frame the
+        # thesis against what the market expects, and flag ownership/short risk.
+        "consensus": estimates.get_consensus(t),
+        "ownership": estimates.get_ownership(t),
     }
     # Coherence ANCHOR (prevention): state the directional signal the numbers imply,
     # so the memo's recommendation can't drift into contradicting its own DCF.

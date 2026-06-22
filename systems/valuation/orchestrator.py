@@ -28,7 +28,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit                         # noqa: E402
+from imdata import skillkit, estimates              # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 # The value range is MATH (bracket of the three methods) — computed in code, not by
@@ -117,6 +117,19 @@ def main(args):
         "fundamentals": fin,
         "margins": margins,
     }
+    # Street consensus (free, yfinance) — what a real note differentiates AGAINST:
+    # our DCF growth vs Street growth, our value vs the Street price target.
+    consensus = estimates.get_consensus(t)
+    if consensus:
+        dossier["consensus"] = consensus
+        cg = estimates.consensus_growth(consensus)
+        og = (dossier.get("dcf_assumptions") or {}).get("growth")
+        if isinstance(cg, (int, float)) and isinstance(og, (int, float)):
+            dossier["growth_vs_consensus"] = (
+                f"Our DCF stage-1 growth {og:.1%} vs Street next-FY ~{cg:.1%}; "
+                + ("we are BELOW consensus (conservative)." if og < cg - 0.01
+                   else "we are ABOVE consensus (aggressive)." if og > cg + 0.01
+                   else "roughly in line with consensus."))
     # Reconciliation (DCF vs comps vs price) — the analytical payoff
     di, ci = dossier["dcf_intrinsic"], comps_implied
     if isinstance(di, (int, float)) and isinstance(ci, (int, float)) and isinstance(price, (int, float)):
@@ -151,8 +164,11 @@ def main(args):
         "price to the call — not a list of numbers. Compare the value_range to "
         "current_price (buy well below the range, sell well above it); reconcile where the "
         "methods disagree and say which you weight and why; name the assumption that would "
-        "flip the call. The 'summary' is one decisive sentence. Ground every claim in the "
-        "figures below — do not invent numbers.\n\n"
+        "flip the call. Position the call against the Street: compare our DCF growth to the "
+        "consensus growth and our value to the analyst price target, and say where your view "
+        "DIFFERS from consensus and why (a call with no edge vs consensus isn't worth making). "
+        "The 'summary' is one decisive sentence. Ground every claim in the figures below — do "
+        "not invent numbers.\n\n"
         f"value_range: {json.dumps(value_range)}\n")
     KEYS = ("recommendation", "rationale", "summary")
     val, vfields = orch.synthesize_fields(

@@ -29,7 +29,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit                         # noqa: E402
+from imdata import skillkit, estimates              # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 RANK_SCHEMA = {
@@ -90,6 +90,14 @@ def enrich(cands):
         c["catalyst_signals"] = signal_counts.get(c["ticker"], {})
         c["catalysts"] = catalysts_by.get(c["ticker"].upper(), [])
         c["top_headlines"] = [i["title"] for i in news.get("items", [])[:6]]
+        # Street consensus (free, yfinance): price-target upside + recommendation
+        cons = estimates.get_consensus(c["ticker"])
+        pt = (cons.get("price_target") or {}) if cons else {}
+        c["target_mean"] = pt.get("mean")
+        c["recommendation"] = cons.get("recommendation") if cons else None
+        c["n_analysts"] = cons.get("n_analysts") if cons else None
+        if isinstance(pt.get("mean"), (int, float)) and isinstance(c.get("current_price"), (int, float)) and c["current_price"]:
+            c["target_upside"] = round(pt["mean"] / c["current_price"] - 1, 4)
         dcf = skillkit.call_skill("dcf-valuation", ["--ticker", c["ticker"]])
         c["dcf_upside"] = dcf.get("upside_vs_price")
         c["intrinsic_value_per_share"] = dcf.get("intrinsic_value_per_share")
@@ -127,6 +135,10 @@ def main(args):
              "intrinsic_value_per_share": c.get("intrinsic_value_per_share"),
              "current_price": c.get("current_price"),
              "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"), "ps": c.get("ps"),
+             "street_target_mean": c.get("target_mean"),
+             "street_target_upside": c.get("target_upside"),
+             "street_recommendation": c.get("recommendation"),
+             "analysts": c.get("n_analysts"),
              "catalysts": _cat(c),
              "recent_headlines": (c.get("top_headlines") or [])[:6]} for c in cands]
     instr = (
@@ -138,7 +150,9 @@ def main(args):
         "(dcf_upside, cheapness vs comps_median), NOT a count or a tautology. Weigh "
         "mandate fit, catalyst strength, and valuation upside. verdict is one of "
         "pursue/watch/pass. Ground every thesis in the figures and events given for "
-        "that name; do not invent.\n\n"
+        "that name; do not invent. Each name also carries Street consensus "
+        "(street_target_upside, street_recommendation) — note where a name screens cheap on "
+        "our numbers but the Street already agrees (crowded) vs where you'd be early.\n\n"
         f"comps_median: {json.dumps(comps_median)}\n")
     rank_system = orch.persona("screening-analyst", audience="a portfolio manager deciding where to spend diligence time")
     ranked = orch.synthesize(instr + f"candidates: {json.dumps(rich, default=str)}",

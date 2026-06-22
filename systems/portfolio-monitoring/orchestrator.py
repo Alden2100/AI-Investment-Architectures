@@ -28,7 +28,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit                         # noqa: E402
+from imdata import skillkit, estimates              # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 TRIAGE_SCHEMA = {
@@ -107,6 +107,19 @@ def main(args):
     risk, corr = exposure_stage(positions, args)
     thesis = thesis_stage(kpis_by_ticker)
 
+    # Crowding / ownership risk context (free, yfinance): high short-interest or very
+    # high institutional ownership is a real risk lens the model should weigh in triage.
+    ownership = {}
+    for t in positions:
+        o = estimates.get_ownership(t)
+        sh = (o or {}).get("short") or {}
+        ctx = {"short_pct_float": sh.get("pct_of_float"),
+               "short_ratio": sh.get("short_ratio"),
+               "pct_institutions": o.get("pct_held_institutions") if o else None}
+        ctx = {k: v for k, v in ctx.items() if v is not None}
+        if ctx:
+            ownership[t] = ctx
+
     # --- breaches are computed deterministically; the model never decides these ---
     breaches = [{"type": b.get("type"), "detail": b.get("detail")}
                 for b in risk.get("breaches", [])]
@@ -127,7 +140,8 @@ def main(args):
         f"per_position: {json.dumps(per, default=str)}\n"
         f"drift: {json.dumps(drift, default=str)}\n"
         f"breaches: {json.dumps(breaches)}\n"
-        f"correlation: HHI={corr.get('herfindahl_index')} avg_corr={corr.get('avg_pairwise_correlation')}"
+        f"correlation: HHI={corr.get('herfindahl_index')} avg_corr={corr.get('avg_pairwise_correlation')}\n"
+        f"ownership_short (crowding context): {json.dumps(ownership, default=str)}"
     )
     tri_system = orch.persona("portfolio-risk-monitor",
                               audience="the portfolio manager and the risk committee")

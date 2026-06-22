@@ -45,10 +45,22 @@
 - Validated: Claude valuation now critiques the DCF's own capex/FCF treatment & beta; memo reads
   the ROIC-compression trend. Full smoke suite 5/5 on **Claude** (route=claude). Unit tests 19/19.
 
-## NOT started — only remaining brief item
-- **#3 widen data:** estimates/consensus, transcripts, segment KPIs, article BODIES (news is
-  titles-only), ownership/float. Largest effort; needs data-source DECISIONS from the user
-  (which providers, paid API keys). Stop here for user input.
+**Fix #3 — widen data (FREE, keyless tier).** DONE & validated on Claude.
+- New `imdata/estimates.py` (yfinance, keyless, cached via new `store.kv_get/kv_put`):
+  `get_consensus()` (forward EPS/rev estimates, growth, price target, recommendations, fwd PE/PEG),
+  `get_ownership()` (float, institutional/insider %, short interest), `consensus_growth()` helper.
+- Wired: valuation (DCF growth vs Street growth + value vs price target → differentiated view),
+  reporting memo (consensus + ownership in inputs), idea-sourcing (target upside + recommendation
+  per candidate), portfolio-monitoring (short-interest/crowding context in triage).
+- Validated: Claude valuation now argues vs the 55-analyst consensus & $561 target; the
+  "gap vs consensus" the brief said was missing now exists.
+
+### #3 remaining — DEFERRED (need a NEW dependency; ask user before adding)
+- SEGMENT KPIs: needs `edgartools` or Arelle (XBRL dimensional parse); companyfacts has NO
+  segment dimensions. ~med effort once dep approved.
+- NEWS ARTICLE BODIES: needs `trafilatura` (best keyless extractor). Google News RSS desc is junk.
+- TRANSCRIPTS: no genuinely free programmatic source; closest free = EDGAR 8-K EX-99.1 earnings
+  releases (could add via existing edgar infra, no new dep) — not yet built.
 
 ## Notes
 `claude` CLI installed at ~/.local/bin/claude (v2.1.185), on subscription auth. Real path validated.
