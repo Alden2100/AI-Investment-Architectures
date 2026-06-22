@@ -103,8 +103,57 @@ def valid_ticker(tok: str) -> bool:
         return False
 
 
+# Company-name resolution against the SEC universe titles (so "Micron",
+# "Coca-Cola", "Broadcom" resolve, not just the handful in ALIASES).
+_CORP_SUFFIX = re.compile(
+    r"\b(incorporated|inc|corporation|corp|company|co|holdings?|group|"
+    r"technologies|technology|ltd|limited|plc|llc|lp|sa|nv|ag|the)\b\.?", re.I)
+_NAME_PHRASE = re.compile(r"\b([A-Z][A-Za-z0-9&.'\-]*(?:\s+[A-Z][A-Za-z0-9&.'\-]*){0,4})")
+_NAME_CACHE: dict = {}
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())).strip()
+
+
+def match_company_name(phrase: str):
+    """Resolve a company-name phrase to a ticker via the universe titles, or None.
+    Conservative: the normalized title must START with the (suffix-stripped) phrase
+    (or its first significant word), and the shortest such title wins (the canonical
+    'Apple Inc.' over 'Apple Hospitality REIT')."""
+    # Drop stray single-letter tokens (possessive "'s", middle initials) that would
+    # defeat the prefix match, e.g. "Micron Technology's" -> "micron".
+    words = [w for w in _norm(_CORP_SUFFIX.sub(" ", phrase)).split()
+             if len(w) > 1 or w.isdigit()]
+    core = " ".join(words)
+    if not core or core.upper() in _STOP:
+        return None
+    if core in _NAME_CACHE:
+        return _NAME_CACHE[core]
+    first = words[0] if words else ""
+    if len(first) < 3:
+        _NAME_CACHE[core] = None
+        return None
+    best, best_len = None, 1 << 30
+    try:
+        rows = store.get_conn().execute(
+            "SELECT ticker, title FROM companies WHERE LOWER(title) LIKE ? LIMIT 300",
+            (first + "%",)).fetchall()
+    except Exception:
+        rows = []
+    for r in rows:
+        tn = _norm(r["title"])
+        # full phrase is a title prefix, or (single-word) the title's first word matches
+        if tn.startswith(core) or (len(words) == 1 and tn.split()[:1] == [first]):
+            if len(tn) < best_len:
+                best, best_len = r["ticker"], len(tn)
+    _NAME_CACHE[core] = best
+    return best
+
+
 def extract_tickers(text: str) -> list:
-    """Validated tickers in TEXT order: known company names + explicit symbols.
+    """Validated tickers in TEXT order: company names (aliases + universe titles)
+    + explicit symbols.
 
     Ordering matters — the first ticker is treated as the subject (e.g. the company
     to value), the rest as peers — so we sort every hit by where it appears.
@@ -114,6 +163,11 @@ def extract_tickers(text: str) -> list:
     for name, tk in ALIASES.items():
         m = re.search(rf"\b{re.escape(name)}\b", low)
         if m:
+            hits.append((m.start(), tk))
+    # Company NAMES resolved against the SEC universe (e.g. "Micron Technology").
+    for m in _NAME_PHRASE.finditer(text):
+        tk = match_company_name(m.group(1))
+        if tk:
             hits.append((m.start(), tk))
     for m in re.finditer(r"\b[A-Z]{1,5}\b", text):
         tok = m.group(0)
