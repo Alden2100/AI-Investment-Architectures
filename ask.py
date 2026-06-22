@@ -218,7 +218,10 @@ def heuristic_system(text: str):
     if re.search(r"\b(memo|write-up|writeup|ic memo|pitch)\b", t): add("reporting", 3)
     if re.search(r"\b(letter|investor letter|lp letter|shareholder)\b", t): add("reporting", 3)
     if re.search(r"\b(worth|fair value|valuation|valu\w+|intrinsic|price target|undervalued|overvalued|cheap|expensive|upside|downside)\b", t): add("valuation", 3)
-    if re.search(r"\b(10-?k|10-?q|8-?k|filing|annual report|quarterly report)\b", t): add("filing-intelligence", 3)
+    # Allow plurals ("10-Ks"), spacing, and "compare ... filings": the \b after K
+    # in the old pattern wouldn't match "10-Ks" (no boundary between K and s).
+    if re.search(r"\b(10[\s-]?[kq]s?|8[\s-]?ks?|filings?|annual reports?|"
+                 r"quarterly reports?|annual filings?|latest 10|prior 10)\b", t): add("filing-intelligence", 3)
     if re.search(r"\b(catalyst|catalysts|screen|ideas|shortlist|names|sourcing|watchlist)\b", t): add("idea-sourcing", 3)
     if re.search(r"\b(portfolio|book|positions?|limits?|drift|rebalance|exposure|concentration|risk limit)\b", t): add("portfolio-monitoring", 3)
     if re.search(r"\bdue diligence|deep dive|full work-?up\b", t): add("due-diligence", 2)
