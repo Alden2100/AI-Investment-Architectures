@@ -32,6 +32,18 @@ TTL_FILING_TEXT = int(os.environ.get("TTL_FILING_TEXT", str(30 * 24 * 3600)))
 TTL_PRICES = int(os.environ.get("TTL_PRICES", str(12 * 3600)))
 TTL_NEWS = int(os.environ.get("TTL_NEWS", str(2 * 3600)))
 TTL_UNIVERSE = int(os.environ.get("TTL_UNIVERSE", str(7 * 24 * 3600)))
+# Broadened-coverage sources (see imdata/sources.py).
+TTL_MACRO = int(os.environ.get("TTL_MACRO", str(12 * 3600)))
+TTL_DAMODARAN = int(os.environ.get("TTL_DAMODARAN", str(30 * 24 * 3600)))   # annual dataset
+TTL_OWNERSHIP = int(os.environ.get("TTL_OWNERSHIP", str(24 * 3600)))
+TTL_SANCTIONS = int(os.environ.get("TTL_SANCTIONS", str(7 * 24 * 3600)))
+TTL_ESTIMATES = int(os.environ.get("TTL_ESTIMATES", str(24 * 3600)))
+
+# Commercial-license gating. When IM_COMMERCIAL_MODE is set, only `public`-tier
+# (government / public-domain, resellable) sources are used; non-public fetchers
+# are skipped. See imdata/sources.py::allowed(). Off by default (all sources usable
+# for development).
+COMMERCIAL_MODE = os.environ.get("IM_COMMERCIAL_MODE", "") not in ("", "0", "false", "False")
 
 
 def ensure_cache_dir() -> None:

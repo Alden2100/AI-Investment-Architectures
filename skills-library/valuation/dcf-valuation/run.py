@@ -103,7 +103,28 @@ def _derive_wacc(ticker, *, shares, price, net_debt, args):
     """Derive WACC from CAPM cost of equity + after-tax cost of debt, weighted by
     market equity and book debt. Returns (wacc, components). Every input falls
     back to a sane default so this never crashes a valuation."""
-    rf, erp = args.rf, args.erp
+    # Risk-free from the live US Treasury 10y curve (public); ERP from Damodaran
+    # (public) — sourced inputs, not the old hardcoded constants. CLI flags override.
+    rf, rf_src = args.rf, "user-supplied"
+    if rf is None:
+        try:
+            from imdata import macro
+            rf = macro.risk_free_rate("10y")
+        except Exception:
+            rf = None
+        rf_src = "US Treasury 10y" if rf is not None else "default"
+        if rf is None:
+            rf = 0.043
+    erp, erp_src = args.erp, "user-supplied"
+    if erp is None:
+        try:
+            from imdata import valinputs
+            erp = valinputs.equity_risk_premium()
+        except Exception:
+            erp = None
+        erp_src = "Damodaran ERP" if erp is not None else "default"
+        if erp is None:
+            erp = 0.046
     beta = args.beta if args.beta is not None else _estimate_beta(ticker)
     beta_used = beta if beta is not None else 1.0
     cost_of_equity = rf + beta_used * erp
@@ -141,7 +162,8 @@ def _derive_wacc(ticker, *, shares, price, net_debt, args):
     components = {
         "method": "CAPM equity + after-tax debt, market-weighted",
         "beta": round(beta_used, 3), "beta_estimated": beta is not None,
-        "risk_free": rf, "equity_risk_premium": erp,
+        "risk_free": rf, "risk_free_source": rf_src,
+        "equity_risk_premium": erp, "erp_source": erp_src,
         "cost_of_equity": round(cost_of_equity, 4),
         "cost_of_debt": round(cost_of_debt, 4), "cost_of_debt_note": kd_note,
         "tax_rate": round(tax_rate, 4), "tax_rate_note": tax_note,
@@ -273,8 +295,10 @@ if __name__ == "__main__":
     p.add_argument("--terminal-growth", type=float, default=0.025)
     p.add_argument("--discount-rate", type=float, default=None,
                    help="WACC override; if omitted, derived from beta + capital structure")
-    p.add_argument("--rf", type=float, default=0.043, help="risk-free rate for CAPM")
-    p.add_argument("--erp", type=float, default=0.05, help="equity risk premium for CAPM")
+    p.add_argument("--rf", type=float, default=None,
+                   help="risk-free rate; default = live US Treasury 10y")
+    p.add_argument("--erp", type=float, default=None,
+                   help="equity risk premium; default = Damodaran ERP")
     p.add_argument("--beta", type=float, default=None, help="override estimated beta")
     p.add_argument("--net-debt", type=float, default=None)
     p.add_argument("--shares", type=float, default=None)

@@ -8,3 +8,15 @@ yfinance>=0.2.40        # primary price source (with keyless fallbacks if it bre
 python-pptx>=0.6,<1     # deck-updater skill
 reportlab>=4.0          # branded PDF report output (pure-python)
 trafilatura>=1.8        # keyless article-body extraction (news / web-search --full)
+
+# --- Data-layer Phase 1 (sources.py registry, macro.py, valinputs.py): no new deps;
+#     US Treasury / Damodaran / FRED are reached via plain requests + the store cache.
+# --- Planned-source modules (install when the module is built; all lazy-imported):
+# fredapi>=0.5           # FRED macro (or raw HTTP, as macro.py does today)
+# edgartools>=3          # XBRL dimensional segment KPIs (segments.py)
+# finvizfinance>=0.14    # Finviz screener/key stats (universe.py upgrade)
+# wbgapi>=1.0            # World Bank macro (macro.py)
+# pandasdmx>=1.9         # ECB SDW (macro.py)
+# praw>=7                # Reddit alt-data (altdata.py)
+# pytrends>=4.9          # Google Trends (altdata.py)
+# duckdb>=0.10           # EDGAR bulk num/tag/sub offline bootstrap (bulk.py)

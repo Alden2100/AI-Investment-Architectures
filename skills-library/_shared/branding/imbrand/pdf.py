@@ -333,7 +333,10 @@ def _valuation(d):
                 f"WACC {_mg(a.get('discount_rate'))} derived — β {wc.get('beta')}"
                 f"{' (est.)' if wc.get('beta_estimated') else ''} · cost of equity {_mg(wc.get('cost_of_equity'))} · "
                 f"cost of debt {_mg(wc.get('cost_of_debt'))} · tax {_mg(wc.get('tax_rate'))} · "
-                f"equity weight {_mg(wc.get('equity_weight'))}.  Model: {a.get('model', '')}", CAPTION))
+                f"equity weight {_mg(wc.get('equity_weight'))}. "
+                f"Risk-free {_mg(wc.get('risk_free'))} ({wc.get('risk_free_source', '?')}), "
+                f"ERP {_mg(wc.get('equity_risk_premium'))} ({wc.get('erp_source', '?')}). "
+                f"Model: {a.get('model', '')}", CAPTION))
     else:
         f.append(Paragraph("Profitability", H2))
         f.append(kv([("Gross / Operating / Net margin",

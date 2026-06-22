@@ -228,6 +228,8 @@ def main(args):
         {"figure": "Current price", "source": "yfinance → Yahoo chart → Stooq (fallback chain)", "as_of": today},
         {"figure": "DCF inputs (OCF, capex, debt, shares)", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": "latest annual filing"},
         {"figure": "Comparable multiples", "source": "SEC EDGAR (XBRL) + market prices", "as_of": today},
+        {"figure": "Risk-free rate (WACC)", "source": "U.S. Treasury daily par yield curve (public)", "as_of": today},
+        {"figure": "Equity risk premium (WACC)", "source": "Aswath Damodaran, NYU Stern (public, with attribution)", "as_of": "annual"},
         {"figure": "Scenario / sensitivity grid", "source": "DCF model (deterministic, growth×WACC)", "as_of": "this run"},
     ]
     nteer = len(dossier.get("comps_table") or [])
