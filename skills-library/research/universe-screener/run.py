@@ -93,13 +93,19 @@ def main(args):
                 meta.get("sic_description") or "").lower():
                 keep = False
         if keep and (args.min_mcap or args.max_mcap):
-            mcap = _market_cap(c["ticker"])
+            try:
+                mcap = _market_cap(c["ticker"])
+            except Exception:
+                continue  # a single name without facts/prices must not kill the scan
             rec["market_cap"] = mcap
             if mcap is None or (args.min_mcap and mcap < args.min_mcap) or (
                 args.max_mcap and mcap > args.max_mcap):
                 keep = False
         if keep and args.min_adv:
-            adv = _adv(c["ticker"])
+            try:
+                adv = _adv(c["ticker"])
+            except Exception:
+                continue
             rec["adv"] = adv
             if adv is None or adv < args.min_adv:
                 keep = False

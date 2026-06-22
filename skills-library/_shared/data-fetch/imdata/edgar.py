@@ -271,13 +271,25 @@ def earnings_release_text(ticker: str, *, max_chars: int = 40000,
 # XBRL companyfacts -> structured financials
 # --------------------------------------------------------------------------- #
 def refresh_facts(ticker: str, force: bool = False) -> int:
-    """Pull all XBRL facts for a ticker into the store. Returns fact count."""
+    """Pull all XBRL facts for a ticker into the store. Returns fact count.
+
+    Not every filer has companyfacts XBRL (foreign private issuers, certain funds,
+    very new filers) — SEC returns 404 for those. Treat a missing dataset as "no
+    facts" (return 0) rather than raising, so a universe scan or a single skill
+    degrades gracefully on those names instead of crashing the whole run.
+    """
+    import requests as _requests
     info = universe.resolve(ticker)
-    data = _sec_json(
-        _COMPANYFACTS_URL.format(cik10=info["cik10"]),
-        ttl=config.TTL_COMPANYFACTS,
-        force=force,
-    )
+    try:
+        data = _sec_json(
+            _COMPANYFACTS_URL.format(cik10=info["cik10"]),
+            ttl=config.TTL_COMPANYFACTS,
+            force=force,
+        )
+    except _requests.HTTPError as e:
+        if getattr(e.response, "status_code", None) in (403, 404):
+            return 0
+        raise
     def _num(v):
         # Coerce to float so a malformed/huge XBRL int can't overflow SQLite's int64 bind.
         try:
