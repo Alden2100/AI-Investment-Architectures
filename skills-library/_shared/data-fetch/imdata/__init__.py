@@ -5,7 +5,9 @@ All sources are free (SEC EDGAR, yfinance/Stooq, RSS) and everything is cached
 in SQLite via `store`.
 """
 from . import (config, store, universe, edgar, prices, news, estimates,  # noqa: F401
-               articles, sources, macro, valinputs)
+               articles, sources, macro, valinputs, ownership, sanctions,
+               segments, volatility, fmp, altdata)
 
 __all__ = ["config", "store", "universe", "edgar", "prices", "news", "estimates",
-           "articles", "sources", "macro", "valinputs"]
+           "articles", "sources", "macro", "valinputs", "ownership", "sanctions",
+           "segments", "volatility", "fmp", "altdata"]

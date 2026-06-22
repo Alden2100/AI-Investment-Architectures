@@ -112,6 +112,67 @@ def fred_series(series_id: str, *, force: bool = False) -> Optional[dict]:
     return out
 
 
+def world_bank(indicator: str = "NY.GDP.MKTP.KD.ZG", country: str = "US",
+               *, force: bool = False) -> Optional[dict]:
+    """Latest World Bank indicator (keyless, public). Default = real GDP growth %."""
+    key = f"wb:{country}:{indicator}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_MACRO)
+        if cached is not None:
+            return cached
+    out = None
+    try:
+        url = (f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}"
+               "?format=json&mrv=1")
+        data = store.cached_get_json(url, ttl=config.TTL_MACRO, timeout=30, force=force)
+        recs = data[1] if isinstance(data, list) and len(data) > 1 else []
+        if recs:
+            out = {"indicator": indicator, "country": country,
+                   "value": recs[0].get("value"), "as_of": recs[0].get("date"),
+                   "source": "world_bank"}
+    except Exception:
+        out = None
+    store.kv_put(key, out or {})
+    return out
+
+
+def cot_positioning(market: str = "S&P 500", *, force: bool = False) -> Optional[dict]:
+    """CFTC Commitments of Traders — non-commercial (speculative) net positioning for a
+    financial futures market (crowding signal). Keyless, public. Best-effort."""
+    key = f"cot:{market.lower()}"
+    if not force:
+        cached = store.kv_get(key, ttl=config.TTL_MACRO)
+        if cached is not None:
+            return cached
+    out = None
+    try:
+        import csv
+        import io
+        body = store.cached_get("https://www.cftc.gov/dea/newcot/FinFutWk.txt",
+                                ttl=config.TTL_MACRO,
+                                headers={"User-Agent": config.SEC_USER_AGENT}, timeout=60, force=force)
+        m = market.lower()
+        for r in csv.reader(io.StringIO(body)):
+            if r and m in (r[0] or "").lower():
+                def _i(x):
+                    try:
+                        return int(float(x))
+                    except (ValueError, TypeError):
+                        return None
+                # Financial COT layout: noncommercial long/short are cols 8/9
+                nlong, nshort = (_i(r[8]) if len(r) > 8 else None,
+                                 _i(r[9]) if len(r) > 9 else None)
+                net = (nlong - nshort) if (nlong is not None and nshort is not None) else None
+                out = {"market": r[0].strip(), "noncommercial_long": nlong,
+                       "noncommercial_short": nshort, "noncommercial_net": net,
+                       "source": "cftc_cot"}
+                break
+    except Exception:
+        out = None
+    store.kv_put(key, out or {})
+    return out
+
+
 def snapshot(*, force: bool = False) -> dict:
     """Compact macro backdrop for portfolio/reporting overlays. Best-effort."""
     out = {"risk_free_10y": risk_free_rate("10y", force=force),

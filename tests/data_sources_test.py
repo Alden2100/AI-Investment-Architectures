@@ -82,11 +82,35 @@ def test_macro():
     hard("cached re-fetch consistent", rf2 == rf)
 
 
+def test_new_modules():
+    print("\nNew source modules (shape + graceful, network):")
+    from imdata import ownership, sanctions, segments, volatility, fmp, altdata, macro
+    # all must return the right type without raising, even if empty
+    s = ownership.insider_summary("MSFT")
+    hard("insider_summary returns a dict with 'signal'", isinstance(s, dict) and "signal" in s)
+    scr = sanctions.screen("Microsoft Corporation")
+    hard("sanctions.screen returns clear/hits", isinstance(scr, dict) and "clear" in scr and "hits" in scr)
+    seg = segments.segments("MSFT")
+    hard("segments returns business/geographic lists",
+         isinstance(seg.get("business"), list) and isinstance(seg.get("geographic"), list))
+    soft(f"segments extracted MSFT business segments ({len(seg.get('business') or [])})",
+         len(seg.get("business") or []) >= 1)
+    v = volatility.vix()
+    hard("vix() returns dict or None", v is None or isinstance(v, dict))
+    # keyed modules must no-op cleanly without keys
+    hard("fmp.enabled() False without key", fmp.enabled() is False)
+    hard("fmp.ratios no-ops to {}", fmp.ratios("MSFT") == {})
+    hard("altdata.reddit no-ops to None without key", altdata.reddit_mentions("MSFT") is None)
+    wb = macro.world_bank()
+    soft(f"World Bank GDP fetched ({(wb or {}).get('value')})", wb is None or "value" in wb)
+
+
 if __name__ == "__main__":
     test_registry()
     test_commercial_gating()
     test_valinputs()
     test_macro()
+    test_new_modules()
     n = sum(_hard)
     print(f"\n{n}/{len(_hard)} hard checks passed")
     sys.exit(0 if all(_hard) else 1)

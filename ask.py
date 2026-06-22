@@ -448,6 +448,8 @@ def build_argv(system: str, text: str) -> tuple:
             return None, "Which company to dig into?"
         return ["--ticker", tickers[0]], None
     if system == "governance-audit":
+        if tickers:
+            return ["--ticker", tickers[0], "--limit", "20"], None
         return ["--limit", "20"], None
     if system == "idea-sourcing":
         argv = []

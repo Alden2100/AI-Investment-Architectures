@@ -28,7 +28,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit, estimates              # noqa: E402
+from imdata import skillkit, estimates, macro, volatility   # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 TRIAGE_SCHEMA = {
@@ -120,6 +120,11 @@ def main(args):
         if ctx:
             ownership[t] = ctx
 
+    # Macro / volatility risk overlay (public: US Treasury + CBOE VIX). The regime
+    # frames how much the book's concentration/correlation actually matters now.
+    macro_ctx = {"rates": macro.snapshot(), "vix": volatility.vix()}
+    macro_ctx = {k: v for k, v in macro_ctx.items() if v}
+
     # --- breaches are computed deterministically; the model never decides these ---
     breaches = [{"type": b.get("type"), "detail": b.get("detail")}
                 for b in risk.get("breaches", [])]
@@ -141,7 +146,8 @@ def main(args):
         f"drift: {json.dumps(drift, default=str)}\n"
         f"breaches: {json.dumps(breaches)}\n"
         f"correlation: HHI={corr.get('herfindahl_index')} avg_corr={corr.get('avg_pairwise_correlation')}\n"
-        f"ownership_short (crowding context): {json.dumps(ownership, default=str)}"
+        f"ownership_short (crowding context): {json.dumps(ownership, default=str)}\n"
+        f"macro_regime (rates + volatility): {json.dumps(macro_ctx, default=str)}"
     )
     tri_system = orch.persona("portfolio-risk-monitor",
                               audience="the portfolio manager and the risk committee")
@@ -238,6 +244,7 @@ def main(args):
                         "correlation_matrix": corr.get("correlation_matrix")},
         "thesis": thesis,
         "ownership": ownership,         # per-name short interest / institutional ownership
+        "macro": macro_ctx,             # rates + VIX regime overlay (public)
         "breaches": breaches,           # deterministic source of truth
         "triage": triage,               # model narration only
         **orch.model_meta(tri),

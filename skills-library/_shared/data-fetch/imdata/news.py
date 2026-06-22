@@ -120,3 +120,37 @@ def get_news(ticker: str, lookback_days: int = 30, refresh: bool = True):
         refresh_news(ticker)
         rows = store.get_news(ticker, since=since)
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Keyed upgrade — NewsAPI / GNews (free_key_eval tier: content copyrighted, dev-only
+# for client work). Gated on the key AND not IM_COMMERCIAL_MODE; falls back to the
+# keyless Google News RSS path above when unavailable. Limits: NewsAPI 100/day,
+# GNews free tier — cached.
+# --------------------------------------------------------------------------- #
+def keyed_headlines(query: str, *, limit: int = 10) -> list:
+    """Headlines from NewsAPI or GNews when a key is present (and not commercial mode).
+    Returns [{title, published, source, url}] or [] when no keyed provider is usable."""
+    import os
+    if config.COMMERCIAL_MODE:
+        return []
+    napi = os.environ.get("NEWSAPI_KEY")
+    gnews = os.environ.get("GNEWS_KEY")
+    try:
+        if napi:
+            url = (f"https://newsapi.org/v2/everything?q={quote(query)}&pageSize={limit}"
+                   f"&sortBy=publishedAt&language=en&apiKey={napi}")
+            data = store.cached_get_json(url, ttl=config.TTL_NEWS, timeout=30)
+            return [{"title": a.get("title"), "published": _norm_date(a.get("publishedAt")),
+                     "source": (a.get("source") or {}).get("name", "NewsAPI"), "url": a.get("url")}
+                    for a in (data.get("articles") or [])[:limit]]
+        if gnews:
+            url = (f"https://gnews.io/api/v4/search?q={quote(query)}&max={limit}"
+                   f"&lang=en&token={gnews}")
+            data = store.cached_get_json(url, ttl=config.TTL_NEWS, timeout=30)
+            return [{"title": a.get("title"), "published": _norm_date(a.get("publishedAt")),
+                     "source": (a.get("source") or {}).get("name", "GNews"), "url": a.get("url")}
+                    for a in (data.get("articles") or [])[:limit]]
+    except Exception:
+        return []
+    return []

@@ -151,3 +151,34 @@ def last_price(ticker: str, refresh: bool = True) -> Optional[float]:
     if not rows:
         rows = get_history(ticker, lookback_days=400, refresh=refresh)
     return rows[-1]["close"] if rows else None
+
+
+# --------------------------------------------------------------------------- #
+# Keyed EOD providers — Polygon.io / Alpha Vantage (free_key_eval tier). A keyed
+# cross-check / upgrade for the keyless chain above; gated on the key and not
+# IM_COMMERCIAL_MODE. Alpha Vantage free = 25 req/day; cached. Returns the latest
+# close or None — the keyless yfinance→Yahoo→Stooq chain stays the default.
+# --------------------------------------------------------------------------- #
+def keyed_last_price(ticker: str) -> Optional[dict]:
+    import os
+    if config.COMMERCIAL_MODE:
+        return None
+    poly = os.environ.get("POLYGON_API_KEY")
+    av = os.environ.get("ALPHAVANTAGE_API_KEY")
+    try:
+        if poly:
+            url = f"https://api.polygon.io/v2/aggs/ticker/{ticker.upper()}/prev?apiKey={poly}"
+            d = store.cached_get_json(url, ttl=config.TTL_PRICES, timeout=30)
+            res = (d.get("results") or [])
+            if res:
+                return {"last": res[0].get("c"), "source": "polygon"}
+        if av:
+            url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
+                   f"&symbol={ticker.upper()}&apikey={av}")
+            d = store.cached_get_json(url, ttl=config.TTL_PRICES, timeout=30)
+            q = d.get("Global Quote") or {}
+            if q.get("05. price"):
+                return {"last": float(q["05. price"]), "source": "alpha_vantage"}
+    except Exception:
+        return None
+    return None

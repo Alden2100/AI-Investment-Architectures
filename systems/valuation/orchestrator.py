@@ -28,7 +28,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit, estimates              # noqa: E402
+from imdata import skillkit, estimates, segments     # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 # The value range is MATH (bracket of the three methods) — computed in code, not by
@@ -131,6 +131,12 @@ def main(args):
         "fundamentals": fin,
         "margins": margins,
     }
+    # Segment revenue (SEC XBRL, public) — business & geographic mix for sum-of-parts.
+    seg = segments.segments(t)
+    if seg.get("business") or seg.get("geographic"):
+        dossier["segments"] = {"business": seg.get("business", [])[:8],
+                               "geographic": seg.get("geographic", [])[:6]}
+
     # Street consensus (free, yfinance) — what a real note differentiates AGAINST:
     # our DCF growth vs Street growth, our value vs the Street price target.
     consensus = estimates.get_consensus(t)
