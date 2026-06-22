@@ -237,6 +237,7 @@ def main(args):
                         "kept_tickers": corr.get("kept_tickers", []),
                         "correlation_matrix": corr.get("correlation_matrix")},
         "thesis": thesis,
+        "ownership": ownership,         # per-name short interest / institutional ownership
         "breaches": breaches,           # deterministic source of truth
         "triage": triage,               # model narration only
         **orch.model_meta(tri),

@@ -484,6 +484,34 @@ def _portfolio(d):
             [f"{x.get('ticker', x.get('type', ''))}: "
              + (f"{_mg(x.get('weight'))} weight" if x.get("weight") else _flat(x.get("note", x.get("type", ""))))
              for x in flags], limit=6)
+
+    # Ownership / short interest — crowding risk (free, yfinance)
+    own = d.get("ownership") or {}
+    if own:
+        def _r1(v):
+            return f"{v:.1f}" if isinstance(v, (int, float)) else "n/a"
+        orows = [[cell(tk, color=C.NAVY, bold=True),
+                  cell(_mg(o.get("short_pct_float")) if o.get("short_pct_float") is not None else "n/a", align=TA_RIGHT),
+                  cell(_r1(o.get("short_ratio")), align=TA_RIGHT),
+                  cell(_mg(o.get("pct_institutions")) if o.get("pct_institutions") is not None else "n/a", align=TA_RIGHT)]
+                 for tk, o in own.items()]
+        if orows:
+            f += [Paragraph("Ownership &amp; Short Interest", H2),
+                  data_table(["Ticker", "Short % Float", "Days to Cover", "Inst. Own"], orows,
+                             [1.3, 1.7, 1.7, 1.6], [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT])]
+
+    # Triage — the model's per-position read (green/yellow/red + the driver/action)
+    triage = d.get("triage") or []
+    if triage:
+        f.append(Paragraph("Triage", H2))
+        for t in triage:
+            if not isinstance(t, dict):
+                continue
+            st = (t.get("status") or "").upper()
+            f.append(Paragraph(
+                f"<b>{t.get('ticker', '')}</b> "
+                f"<font color='{_hexc(C.status_color(t.get('status', '')))}'>[{st}]</font> "
+                f"— {_flat(t.get('note', ''))}", SMALL))
     return h, f
 
 
