@@ -58,12 +58,18 @@ def main(args):
             row = store.get_filing(args.accession)
             if row is None:
                 raise ValueError(f"Accession {args.accession} not found; fetch filings first.")
+            text = edgar.filing_text(row["accession"])
+            source = "8-K"
         else:
-            row = edgar.latest_filing(args.ticker, "8-K")
-            if row is None:
+            # Prefer the EX-99.1 earnings PRESS RELEASE (real numbers/guidance/prepared
+            # remarks) over the 8-K cover page, which only points at the exhibit.
+            rel = edgar.earnings_release_text(args.ticker)
+            if rel is None:
                 raise ValueError(f"No 8-K found for {args.ticker}.")
-        text = edgar.filing_text(row["accession"])
-        source = "8-K"
+            text = rel["text"]
+            source = "8-K EX-99.1" if (rel.get("exhibit") or "").lower().startswith(("ex-99", "ex99")) \
+                or "99" in (rel.get("exhibit") or "") else "8-K"
+            row = store.get_filing(rel["accession"])
 
     clip = skillkit.excerpt(
         text, max_chars=50000,

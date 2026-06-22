@@ -86,13 +86,38 @@ def main(args):
         provider, results = "brave", _brave(args.query, n)
     else:
         provider, results = "duckduckgo", _duckduckgo(args.query, n)
+
+    bodies_added = 0
+    if args.full and results:
+        # Opt-in: fetch + extract the article body for the top results so the model
+        # reads real content, not just titles/snippets. Additive — leaves the
+        # {title,url,snippet} shape intact and only adds a `text` field. Best-effort:
+        # paywalled/JS pages come back empty and are simply left without text.
+        from imdata import articles
+        top = results[:max(1, args.full_max)]
+        fetched = {a["url"]: a for a in articles.fetch_articles(
+            [r["url"] for r in top], limit=args.full_max, timeout=args.full_timeout)}
+        for r in top:
+            art = fetched.get(r["url"])
+            if art and art.get("text"):
+                r["text"] = art["text"]
+                if art.get("site"):
+                    r["site"] = art["site"]
+                if art.get("published"):
+                    r["published"] = art["published"]
+                bodies_added += 1
+
+    summ = (f"{len(results)} result(s) for '{args.query}' via {provider}."
+            if results else f"No results for '{args.query}' via {provider}.")
+    if args.full:
+        summ += f" {bodies_added} with extracted article text."
     return {
         "query": args.query,
         "provider": provider,
         "count": len(results),
         "results": results,
-        "summary": (f"{len(results)} result(s) for '{args.query}' via {provider}."
-                    if results else f"No results for '{args.query}' via {provider}."),
+        "bodies_extracted": bodies_added,
+        "summary": summ,
     }
 
 
@@ -100,4 +125,10 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Keyless-by-default web search.")
     p.add_argument("--query", required=True)
     p.add_argument("--max", type=int, default=8, help="max results (1-25)")
+    p.add_argument("--full", action="store_true",
+                   help="fetch + extract article BODY text for the top results")
+    p.add_argument("--full-max", type=int, default=5,
+                   help="max article bodies to fetch when --full (default 5)")
+    p.add_argument("--full-timeout", type=int, default=10,
+                   help="per-URL fetch timeout in seconds when --full")
     skillkit.run(main, p)

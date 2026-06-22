@@ -55,12 +55,25 @@
 - Validated: Claude valuation now argues vs the 55-analyst consensus & $561 target; the
   "gap vs consensus" the brief said was missing now exists.
 
+**#3 article bodies + 8-K earnings (FREE).** DONE & validated.
+- New `imdata/articles.py`: `fetch_article(url)` / `fetch_articles(urls,...)` — requests +
+  trafilatura (added to requirements.txt + installed), thread-safe concurrency (no sqlite in
+  threads), kv-cached (7-day TTL), graceful empty on paywall/JS/redirect/timeout.
+- `web-search --full` (+ --full-max/--full-timeout): adds `text` to results, additive. WORKS
+  (direct publisher URLs — 4/4 bodies, up to 28k chars).
+- `news-fetcher --full`: attaches `body` best-effort. LIMITED: Google News links are redirect/
+  consent pages + SEC Atom are index pages → mostly empty (documented in SKILL.md).
+- `catalyst-flagger`: now pulls REAL article content via web-search --full (direct URLs), so
+  catalysts are flagged from content not headlines (#12). idea-sourcing consumes that.
+- `edgar.earnings_release_text()`: finds the latest 8-K's EX-99.1 EARNINGS press release
+  (scans recent 8-Ks + content heuristic, not just the cover) — wired into earnings-call-summarizer.
+  No new dep. Validated: MSFT Q3 release, 22k chars.
+- Tests: tests/article_test.py (5/5 hard checks). Smoke 5/5.
+
 ### #3 remaining — DEFERRED (need a NEW dependency; ask user before adding)
 - SEGMENT KPIs: needs `edgartools` or Arelle (XBRL dimensional parse); companyfacts has NO
   segment dimensions. ~med effort once dep approved.
-- NEWS ARTICLE BODIES: needs `trafilatura` (best keyless extractor). Google News RSS desc is junk.
-- TRANSCRIPTS: no genuinely free programmatic source; closest free = EDGAR 8-K EX-99.1 earnings
-  releases (could add via existing edgar infra, no new dep) — not yet built.
+- Genuinely-free earnings TRANSCRIPTS (verbatim Q&A): none exist; 8-K EX-99.1 (done) is the proxy.
 
 ## Notes
 `claude` CLI installed at ~/.local/bin/claude (v2.1.185), on subscription auth. Real path validated.

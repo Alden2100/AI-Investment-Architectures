@@ -80,6 +80,22 @@ def main(args):
                 lines.append(f"- {n.get('published','')} [{n.get('source','')}] {n.get('title','')}")
         else:
             lines.append("- none")
+
+        # Real article CONTENT to flag catalysts from (not just headlines). The Google
+        # News RSS links above are redirect pages that don't extract, so we pull a few
+        # DIRECT publisher articles via web-search --full instead. Best-effort/guarded.
+        try:
+            web = skillkit.call_skill(
+                "web-search", ["--query", f"{info['title']} stock news",
+                               "--max", "6", "--full", "--full-max", "4"])
+            excerpts = [(r.get("title"), r.get("text")) for r in (web.get("results") or [])
+                        if r.get("text")][:3]
+            if excerpts:
+                lines.append("Article excerpts (direct sources):")
+                for title, text in excerpts:
+                    lines.append(f"- {title}: {text[:700]}")
+        except Exception:
+            pass
         blocks.append("\n".join(lines))
 
     signals = "\n\n".join(blocks)

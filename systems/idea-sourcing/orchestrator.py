@@ -86,6 +86,8 @@ def enrich(cands):
     comps = skillkit.call_skill("comps-builder", ["--tickers", *tickers])
     comp_by = {r["ticker"]: r for r in comps.get("table", [])}
     for c in cands:
+        # Headlines for context; the REAL article content reaches the model through
+        # catalyst-flagger, which now reads direct-source article bodies via web-search.
         news = skillkit.call_skill("news-fetcher", ["--ticker", c["ticker"], "--lookback", "30"])
         c["catalyst_signals"] = signal_counts.get(c["ticker"], {})
         c["catalysts"] = catalysts_by.get(c["ticker"].upper(), [])

@@ -182,6 +182,91 @@ def filing_text(accession: str, force: bool = False) -> str:
     return text
 
 
+def _filing_index(cik: int, accession: str) -> Optional[dict]:
+    """The filing folder's index.json (lists every document in the submission)."""
+    acc_nodash = accession.replace("-", "")
+    url = f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/index.json"
+    try:
+        return store.cached_get_json(url, ttl=config.TTL_FILING_TEXT,
+                                     headers=_headers(), min_interval=_MIN_INTERVAL)
+    except Exception:
+        return None
+
+
+_EX99_RE = re.compile(r"ex[-_]?99", re.I)
+
+
+def _ex99_doc(cik: int, accession: str) -> Optional[str]:
+    """Filename of the EX-99 press-release exhibit in a filing, or None. The
+    index.json `type` field is only an icon name, so match on the document NAME
+    (earnings exhibits are conventionally named like ...ex991.htm / ex-99_1.htm)."""
+    idx = _filing_index(cik, accession)
+    if not idx:
+        return None
+    items = (idx.get("directory", {}) or {}).get("item", []) or []
+    cand = [it.get("name", "") for it in items
+            if _EX99_RE.search(it.get("name", "") or "")
+            and it.get("name", "").lower().endswith((".htm", ".html", ".txt"))]
+    if not cand:
+        return None
+    # prefer EX-99.1 (the press release) over EX-99.2/.3 (slides, etc.)
+    cand.sort(key=lambda n: ("991" not in n.replace("-", "").replace("_", ""), n))
+    return cand[0]
+
+
+def earnings_release_text(ticker: str, *, max_chars: int = 40000,
+                          scan: int = 8) -> Optional[dict]:
+    """Earnings press release (8-K exhibit EX-99.1) — the closest free proxy for an
+    earnings call / prepared remarks. The 8-K primary doc is usually just the Item
+    2.02 cover that points at the exhibit, and the *latest* 8-K is often not an
+    earnings filing, so this scans recent 8-Ks for the one carrying an EX-99 exhibit
+    and returns its readable text.
+
+    Returns {accession, filing_date, exhibit, url, text} or None. Falls back to the
+    most recent 8-K's primary text only if no EX-99 exhibit is found in the scan.
+    """
+    info = universe.resolve(ticker)
+    rows = list_filings(ticker, form="8-K", limit=scan) or []
+    if not rows:
+        return None
+    first_ex99 = None   # newest EX-99 of any kind, as a fallback
+    for row in rows:
+        doc = _ex99_doc(info["cik"], row["accession"])
+        if not doc:
+            continue
+        url = _ARCHIVE.format(cik=info["cik"], acc_nodash=row["accession"].replace("-", ""),
+                              doc=doc)
+        try:
+            raw = store.cached_get(url, ttl=config.TTL_FILING_TEXT, headers=_doc_headers(),
+                                   min_interval=_MIN_INTERVAL)
+            text = _html_to_text(raw) if "<" in raw[:2000] else raw
+        except Exception:
+            continue
+        if not text or len(text) <= 400:
+            continue
+        rec = {"accession": row["accession"], "filing_date": row["filing_date"],
+               "exhibit": doc, "url": url, "text": text[:max_chars]}
+        if first_ex99 is None:
+            first_ex99 = rec
+        # Earnings press releases talk about a quarter/fiscal period AND report
+        # revenue / EPS / net income — distinguish them from other EX-99 releases.
+        low = text[:8000].lower()
+        if re.search(r"quarter|fiscal", low) and re.search(
+                r"revenue|earnings per share|net income|diluted|operating income", low):
+            return rec
+    if first_ex99 is not None:
+        return first_ex99
+    # fallback: most recent 8-K primary document (no EX-99 found at all)
+    row = rows[0]
+    try:
+        text = filing_text(row["accession"])
+        return {"accession": row["accession"], "filing_date": row["filing_date"],
+                "exhibit": row.get("primary_doc"), "url": row.get("url"),
+                "text": (text or "")[:max_chars]}
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # XBRL companyfacts -> structured financials
 # --------------------------------------------------------------------------- #
