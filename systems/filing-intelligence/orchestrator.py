@@ -139,6 +139,9 @@ def competitive(ticker):
     moat_summary = m.get("summary") if isinstance(m.get("summary"), str) and m["summary"].strip() else (
         m.get("text") if isinstance(m.get("text"), str) and len(m.get("text", "")) > 20 else None)
     return {"margins": margins,
+            "margin_trend": m.get("margin_trend") or [],   # multi-year durability evidence
+            "roic": m.get("roic"),
+            "roic_series": m.get("roic_series") or [],
             "quality": _quality(margins),            # deterministic qualitative tier
             "moat_type": moat.get("moat_type"),
             "moat_durability": moat.get("durability"),

@@ -196,7 +196,8 @@ def main(args):
         if isinstance(s, dict) and s.get("ticker") in cand_by:
             c = cand_by[s["ticker"]]
             for fld in ("dcf_upside", "ev_ebitda", "pe", "ps", "current_price",
-                        "market_cap", "revenue", "company"):
+                        "market_cap", "revenue", "company",
+                        "target_mean", "target_upside", "recommendation"):
                 s.setdefault(fld, c.get(fld))
             sig = c.get("catalyst_signals")
             s.setdefault("catalysts", sum(sig.values()) if isinstance(sig, dict) else 0)

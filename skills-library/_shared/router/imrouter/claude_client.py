@@ -137,7 +137,11 @@ def complete(prompt: str, *, system: str = "", schema: Optional[dict] = None,
 
     cmd = [cli, "-p", "--output-format", "json",
            "--model", model or DEFAULT_MODEL,
-           # Single-shot completion, not an agentic loop. Keep it a pure text turn.
+           # Pure single-shot completion, NOT an agentic loop. Disabling tools is
+           # essential: with tools available, Claude Code may try to call one to
+           # "gather data" on a big prompt, burn the single turn, and fail with
+           # error_max_turns instead of answering. No tools => it must answer in text.
+           "--tools", "",
            "--max-turns", "1"]
     if system:
         cmd += ["--append-system-prompt", system]

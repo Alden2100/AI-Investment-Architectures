@@ -144,14 +144,19 @@ _BEAR_RE = re.compile(r"\b(sell|underweight|trim|reduce|avoid|short|exit|"
 
 def text_lean(text: str) -> str:
     """The directional lean a recommendation's PROSE expresses: 'bullish' /
-    'bearish' / 'neutral' (neutral when it's hold-like, mixed, or unclear)."""
+    'bearish' / 'neutral'. When both directions appear (e.g. a BUY call that also
+    states sell-discipline like "trim if..."), the LEADING call wins — a memo leads
+    with its recommendation, and incidental risk/sell-discipline language later
+    shouldn't neutralize it."""
     if not isinstance(text, str) or not text.strip():
         return "neutral"
-    bull, bear = bool(_BULL_RE.search(text)), bool(_BEAR_RE.search(text))
-    if bull and not bear:
+    bm, rm = _BULL_RE.search(text), _BEAR_RE.search(text)
+    if bm and not rm:
         return "bullish"
-    if bear and not bull:
+    if rm and not bm:
         return "bearish"
+    if bm and rm:
+        return "bullish" if bm.start() < rm.start() else "bearish"
     return "neutral"
 
 

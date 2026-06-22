@@ -141,6 +141,11 @@ def test_coherence_check():
     # Consistent: SELL rec vs bearish numbers => no warning.
     ok = orch.coherence(bearish, "We recommend selling; the stock is overvalued.")
     check("SELL rec vs bearish numbers is coherent", ok == "")
+    # Leading call wins: a BUY rec that also states sell-discipline ("trim if...")
+    # is still bullish, so vs bearish numbers it must be flagged.
+    mixed = "BUY / Overweight, a full position. Sell discipline: trim or move to Hold if ROIC falls."
+    check("leading BUY beats trailing 'trim/Hold' -> bullish", orch.text_lean(mixed) == "bullish")
+    check("mixed BUY rec vs bearish numbers is flagged", bool(orch.coherence(bearish, mixed)))
     # Bullish numbers + buy => coherent.
     bull = orch.numeric_lean(dcf_upside=0.40)
     check("DCF +40% reads bullish", bull == "bullish")

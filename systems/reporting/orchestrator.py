@@ -115,13 +115,14 @@ def build_memo(ticker):
     med = inputs.get("comps_median") or {}
     pf = lambda x: f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
     money = lambda x: f"${float(x):,.2f}" if isinstance(x, (int, float)) else "n/a"
+    xm = lambda x: f"{x:.1f}x" if isinstance(x, (int, float)) else "n/a"
     bluf = (f"IC recommendation for {t}: {_first_sentence(rec) or 'see recommendation'}. "
             f"Price {money(inputs.get('price'))} vs DCF intrinsic {money(inputs.get('dcf_intrinsic_per_share'))} "
-            f"({pf(inputs.get('dcf_upside'))}); comps median EV/EBITDA {med.get('ev_ebitda')}x.")
+            f"({pf(inputs.get('dcf_upside'))}); comps median EV/EBITDA {xm(med.get('ev_ebitda'))}.")
     assumptions = [
         {"param": "Price", "value": money(inputs.get("price")), "why": "Latest close (best-effort feed)."},
         {"param": "DCF intrinsic / upside", "value": f"{money(inputs.get('dcf_intrinsic_per_share'))} ({pf(inputs.get('dcf_upside'))})", "why": "House DCF (8% growth, 9% WACC defaults)."},
-        {"param": "Comps median (EV/EBITDA · P/E)", "value": f"{med.get('ev_ebitda')}x · {med.get('pe')}x", "why": "Peer-relative cross-check."},
+        {"param": "Comps median (EV/EBITDA · P/E)", "value": f"{xm(med.get('ev_ebitda'))} · {xm(med.get('pe'))}", "why": "Peer-relative cross-check."},
     ]
     provenance = [
         {"figure": "Price", "source": "yfinance → Yahoo → Stooq", "as_of": today},
@@ -131,7 +132,7 @@ def build_memo(ticker):
     ]
     commentary = [
         {"skill": "dcf-valuation", "note": f"Intrinsic {money(inputs.get('dcf_intrinsic_per_share'))}/sh ({pf(inputs.get('dcf_upside'))} vs price)."},
-        {"skill": "comps-builder", "note": f"Peer median EV/EBITDA {med.get('ev_ebitda')}x, P/E {med.get('pe')}x."},
+        {"skill": "comps-builder", "note": f"Peer median EV/EBITDA {xm(med.get('ev_ebitda'))}, P/E {xm(med.get('pe'))}."},
         {"skill": "moat-analyzer", "note": "Competitive position + margins fed into the memo."},
         {"skill": "memo-writer", "note": f"Drafted the {len(sections) if isinstance(sections, dict) else 0}-section IC memo from the above (route: {route})."},
     ]

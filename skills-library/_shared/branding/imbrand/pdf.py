@@ -326,6 +326,14 @@ def _valuation(d):
                 ("Net margin", cell(_mg(mar.get("net")))),
                 ("Revenue", cell(_big((dz.get("fundamentals") or {}).get("revenue")))),
                 ], label_w=1.6, val_w=1.8)))
+        # WACC derivation (no longer a hardcoded 9%) — show the CAPM components.
+        wc = a.get("wacc_components") or {}
+        if wc.get("beta") is not None:
+            f.append(Paragraph(
+                f"WACC {_mg(a.get('discount_rate'))} derived — β {wc.get('beta')}"
+                f"{' (est.)' if wc.get('beta_estimated') else ''} · cost of equity {_mg(wc.get('cost_of_equity'))} · "
+                f"cost of debt {_mg(wc.get('cost_of_debt'))} · tax {_mg(wc.get('tax_rate'))} · "
+                f"equity weight {_mg(wc.get('equity_weight'))}.  Model: {a.get('model', '')}", CAPTION))
     else:
         f.append(Paragraph("Profitability", H2))
         f.append(kv([("Gross / Operating / Net margin",
@@ -357,6 +365,21 @@ def _valuation(d):
     if sens is not None:
         f += [Paragraph("Sensitivity — Value/Share by Growth × WACC", H2), sens]
 
+    # Street consensus — what our view is differentiated AGAINST (free, yfinance).
+    cons = dz.get("consensus") or {}
+    if cons:
+        pt = cons.get("price_target") or {}
+        f.append(Paragraph("Street Consensus", H2))
+        f.append(_two_col(
+            kv([("Price target (mean)", cell(_money(pt.get("mean")), color=C.NAVY, bold=True)),
+                ("Target range", cell(f"{_money(pt.get('low'))} – {_money(pt.get('high'))}")),
+                ("Recommendation", cell(str(cons.get("recommendation") or "n/a").replace("_", " ").upper(),
+                                        color=C.STEEL, bold=True))], label_w=1.9, val_w=1.6),
+            kv([("Analysts", cell(_flat(cons.get("n_analysts")))),
+                ("Forward EPS / P-E", cell(f"{_money(cons.get('forward_eps'))} · {_x(cons.get('forward_pe'))}")),
+                ("PEG", cell(_x(cons.get("peg"))))], label_w=1.7, val_w=1.8)))
+        if dz.get("growth_vs_consensus"):
+            f.append(Paragraph("Our view vs Street: " + _flat(dz["growth_vs_consensus"]), CAPTION))
     if dz.get("reconciliation"):
         f += [Paragraph("Reconciliation — DCF vs Comps vs Price", H2),
               Paragraph(_flat(dz["reconciliation"]), BODY)]
@@ -382,11 +405,12 @@ def _idea(d):
             cell(_pct(r.get("dcf_upside")), color=_pct_color(r.get("dcf_upside")), align=TA_RIGHT),
             cell(_x(r.get("ev_ebitda")), align=TA_RIGHT),
             cell(_x(r.get("pe")), align=TA_RIGHT),
-            cell(r.get("catalysts", 0), align=TA_RIGHT),
+            cell(_pct(r.get("target_upside")) if r.get("target_upside") is not None else "—",
+                 color=_pct_color(r.get("target_upside")), align=TA_RIGHT),
         ])
     f = [Paragraph("Ranked Shortlist", H2),
-         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "DCF", "EV/EBITDA", "P/E", "Cat."], tr,
-                    [0.35, 0.85, 1.0, 1.2, 0.95, 1.2, 0.75, 0.5],
+         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "DCF", "EV/EBITDA", "P/E", "Street↑"], tr,
+                    [0.35, 0.85, 1.0, 1.15, 0.9, 1.15, 0.7, 0.85],
                     [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
          Paragraph(f"Peer medians — EV/EBITDA {_x(med.get('ev_ebitda'))} · "
                    f"P/E {_x(med.get('pe'))} · P/S {_x(med.get('ps'))}", CAPTION)]
@@ -495,6 +519,19 @@ def _filing(d):
                           cell(f"gross {_mg(mar.get('gross'))} · operating {_mg(mar.get('operating'))} · "
                                f"net {_mg(mar.get('net'))}", color=C.NAVY, bold=True))],
                         label_w=1.9, val_w=4.8))
+        # Multi-year margin trend + ROIC — durability evidence, not a single snapshot.
+        trend = comp.get("margin_trend") or []
+        if len(trend) >= 2:
+            trows = [[cell((t.get("period_end") or "")[:4], color=C.STEEL, bold=True),
+                      cell(_mg(t.get("gross")), align=TA_RIGHT), cell(_mg(t.get("operating")), align=TA_RIGHT),
+                      cell(_mg(t.get("net")), align=TA_RIGHT)] for t in trend]
+            f.append(data_table(["FY", "Gross", "Operating", "Net"], trows,
+                                [1.4, 1.6, 1.6, 1.6], [TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT]))
+        rs = comp.get("roic_series") or []
+        if comp.get("roic") is not None:
+            hist = " → ".join(_mg(x.get("roic")) for x in rs[:3][::-1]) if rs else _mg(comp.get("roic"))
+            f.append(Paragraph(f"ROIC (NOPAT / invested capital): {_mg(comp.get('roic'))}"
+                               + (f"  ·  recent: {hist}" if rs else ""), CAPTION))
         # Qualitative
         qual_rows = []
         if comp.get("quality"):
@@ -536,7 +573,20 @@ def _reporting(d):
     rec = _flat(sec.get("recommendation", "")) if isinstance(sec, dict) else ""
     h = hero(f"IC Memo · {d.get('ticker', '')}", rec or "Investment Committee Memo",
              C.NAVY, note="Built from: " + ", ".join(d.get("inputs_used", [])))
-    f = [Paragraph("Key Metrics", H2), _two_col(
+    f = []
+    # Coherence guard: if the memo's call contradicts its own DCF, flag it loudly.
+    if d.get("coherence_warning"):
+        warn = Table([[cell("⚠ COHERENCE", color=C.NEGATIVE, bold=True, size=9.5)],
+                      [Paragraph(_flat(d["coherence_warning"]),
+                                 ParagraphStyle("cw", fontName=C.FONT_SANS, fontSize=10,
+                                                leading=14.5, textColor=C.INK))]],
+                     colWidths=[6.9 * inch])
+        warn.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C.CLOUD),
+                                  ("LINEBEFORE", (0, 0), (0, -1), 3, C.NEGATIVE),
+                                  ("LEFTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 6),
+                                  ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
+        f += [warn, Spacer(1, 8)]
+    f += [Paragraph("Key Metrics", H2), _two_col(
         kv([("Price", cell(_money(m.get("price")), color=C.NAVY, bold=True)),
             ("DCF intrinsic", cell(f"{_money(m.get('dcf_intrinsic_per_share'))} ({_pct(m.get('dcf_upside'))})",
                                    color=_pct_color(m.get("dcf_upside")))),
@@ -546,6 +596,20 @@ def _reporting(d):
             ("Net income", cell(_big(fin.get("net_income")))),
             ("Gross / Net margin", cell(f"{_mg(mar.get('gross'))} · {_mg(mar.get('net'))}")),
             ], label_w=1.6, val_w=1.8))]
+    # Street consensus + ownership / short interest (free, yfinance)
+    cons = m.get("consensus") or {}
+    own = m.get("ownership") or {}
+    if cons or own:
+        pt = cons.get("price_target") or {}
+        sh = own.get("short") or {}
+        f.append(_two_col(
+            kv([("Street target", cell(_money(pt.get("mean")), color=C.NAVY, bold=True)),
+                ("Street rating", cell(str(cons.get("recommendation") or "n/a").replace("_", " ").upper())),
+                ("Forward EPS / PEG", cell(f"{_money(cons.get('forward_eps'))} · {_x(cons.get('peg'))}"))],
+               label_w=1.8, val_w=1.6),
+            kv([("Inst. ownership", cell(_mg(own.get("pct_held_institutions")))),
+                ("Short % float", cell(_mg(sh.get("pct_of_float")))),
+                ("Float", cell(_big(own.get("float_shares"))))], label_w=1.7, val_w=1.8)))
     if isinstance(sec, dict) and sec:
         for k, v in sec.items():
             f += [Paragraph(k.replace("_", " ").title(), H2), Paragraph(_flat(v), BODY)]

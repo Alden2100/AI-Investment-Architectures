@@ -50,6 +50,20 @@ def _m(v):
         return "n/a"
 
 
+def _b(v):
+    """Abbreviated big-money ($71.6B / $1.1T) for aggregates — keeps tables and
+    commentary readable rather than printing $71,611,000,000.00."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    a = abs(x)
+    for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if a >= div:
+            return f"${x / div:,.1f}{suf}"
+    return f"${x:,.0f}"
+
+
 def main(args):
     t = args.ticker.upper()
     dcf_args = ["--ticker", t]
@@ -192,14 +206,15 @@ def main(args):
     a = dossier["dcf_assumptions"] or {}
     pf = lambda x: f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
     pg = lambda x: f"{x * 100:.1f}%" if isinstance(x, (int, float)) else "n/a"
+    xm = lambda x: f"{x:.1f}x" if isinstance(x, (int, float)) else "n/a"
     dcf_ok = isinstance(dossier["dcf_intrinsic"], (int, float))
     if dcf_ok:
         assumptions = [
             {"param": "FCF growth (explicit)", "value": pg(a.get("growth")), "why": f"{a.get('years', 5)}-yr explicit horizon; base case."},
             {"param": "Discount rate (WACC)", "value": pg(a.get("discount_rate")), "why": "Unlevered cost of capital."},
             {"param": "Terminal growth", "value": pg(a.get("terminal_growth")), "why": "Gordon-growth perpetuity."},
-            {"param": "Base FCF", "value": _m(a.get("base_fcf")), "why": a.get("base_fcf_note", "reported OCF − capex")},
-            {"param": "Net debt", "value": _m(a.get("net_debt")), "why": "EV→equity bridge."},
+            {"param": "Base FCF", "value": _b(a.get("base_fcf")), "why": a.get("base_fcf_note", "reported OCF − capex")},
+            {"param": "Net debt", "value": _b(a.get("net_debt")), "why": "EV→equity bridge."},
             {"param": "Shares out.", "value": f"{a.get('shares'):,.0f}" if isinstance(a.get("shares"), (int, float)) else "—", "why": "Per-share conversion."},
         ]
     else:
@@ -218,10 +233,10 @@ def main(args):
     nteer = len(dossier.get("comps_table") or [])
     med = dossier.get("comps_median") or {}
     commentary = [
-        {"skill": "dcf-valuation", "note": (f"Unlevered-FCF DCF: base FCF {_m(a.get('base_fcf'))}, "
-            f"EV {_m(dossier.get('enterprise_value'))}, intrinsic {_m(dossier['dcf_intrinsic'])}/sh ({pf(dossier['dcf_upside'])} vs price)."
+        {"skill": "dcf-valuation", "note": (f"Unlevered-FCF DCF: base FCF {_b(a.get('base_fcf'))}, "
+            f"EV {_b(dossier.get('enterprise_value'))}, intrinsic {_m(dossier['dcf_intrinsic'])}/sh ({pf(dossier['dcf_upside'])} vs price)."
             if dcf_ok else "DCF not meaningful — no clean free cash flow (typical for banks/financials); relied on comps.")},
-        {"skill": "comps-builder", "note": f"{nteer}-peer multiples table; median EV/EBITDA {med.get('ev_ebitda')}x, P/E {med.get('pe')}x; peer-implied value {_m(dossier.get('comps_implied'))}."},
+        {"skill": "comps-builder", "note": f"{nteer}-peer multiples table; median EV/EBITDA {xm(med.get('ev_ebitda'))}, P/E {xm(med.get('pe'))}; peer-implied value {_m(dossier.get('comps_implied'))}."},
         {"skill": "scenario-analyzer", "note": "Bull/base/bear cases plus a growth×WACC sensitivity grid (see exhibit)."},
         {"skill": "fundamentals-fetcher", "note": f"Profitability: gross {pg((dossier.get('margins') or {}).get('gross'))}, operating {pg((dossier.get('margins') or {}).get('operating'))}, net {pg((dossier.get('margins') or {}).get('net'))}."},
     ]
