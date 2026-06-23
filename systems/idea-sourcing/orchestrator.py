@@ -14,7 +14,14 @@ while _d != os.path.dirname(_d):
     if os.path.isdir(os.path.join(_d, "skills-library")):
         LIB = os.path.join(_d, "skills-library"); break
     _d = os.path.dirname(_d)
-DATA_DIR = os.path.join(HERE, "data"); os.makedirs(DATA_DIR, exist_ok=True)
+def _writable_dir(_p):
+    """Use _p if writable, else a per-user cache dir (read-only plugin installs /
+    OneDrive-synced trees where SQLite can't open a DB next to the code)."""
+    try:
+        os.makedirs(_p, exist_ok=True); _t = os.path.join(_p, ".w"); open(_t, "w").close(); os.remove(_t); return _p
+    except OSError:
+        _a = os.path.join(os.path.expanduser("~"), ".cache", "im-ai-skills", os.path.basename(HERE)); os.makedirs(_a, exist_ok=True); return _a
+DATA_DIR = _writable_dir(os.path.join(HERE, "data"))
 _envf = os.path.join(os.path.dirname(LIB), ".env")
 if os.path.exists(_envf):
     for _ln in open(_envf):
@@ -68,7 +75,10 @@ def screen(args):
                       "market_cap": m.get("market_cap"),
                       "revenue": f.get("financials", {}).get("revenue"),
                       "net_income": f.get("financials", {}).get("net_income")})
-    return cands
+    # Carry the screener's coverage/setup signal so a partial-index run isn't read as
+    # "no such names" downstream.
+    return cands, {"setup_hint": screened.get("setup_hint"),
+                   "snapshot_coverage": screened.get("snapshot_coverage")}
 
 
 def enrich(cands):
@@ -134,9 +144,15 @@ def main(args):
             or args.min_mcap or args.max_mcap):
         raise ValueError("Provide a mandate: --ticker-in and/or --name-contains / "
                          "--sic-contains / --min-mcap / --max-mcap.")
-    cands = screen(args)
+    cands, screen_meta = screen(args)
+    setup_hint = screen_meta.get("setup_hint")
     if not cands:
-        return {"candidates": [], "summary": "No names matched the mandate."}
+        msg = "No names matched the mandate."
+        if setup_hint:
+            msg = ("No names surfaced, but this is likely a COVERAGE gap, not absence. "
+                   + setup_hint)
+        return {"candidates": [], "summary": msg,
+                "setup_hint": setup_hint, "snapshot_coverage": screen_meta.get("snapshot_coverage")}
     comps_median = enrich(cands)
 
     # Content-rich view for the ranking model — the ACTUAL catalysts (type/date/
@@ -291,6 +307,8 @@ def main(args):
     if data_flags:
         risks.insert(1, "⚠ Data-quality flags raised on " + "; ".join(
             f"{tk}: {', '.join(fl)}" for tk, fl in data_flags.items()) + ".")
+    if setup_hint:
+        risks.insert(0, "⚠ " + setup_hint)
     falsifiers = [f"Before acting, validate {top.get('ticker', 'each name')}'s price, share count and TTM figures against a second source.",
                   "Advance a name only after diligence confirms the catalyst and the relative-value read holds on TTM/forward numbers.",
                   "Re-screen if the mandate (sector/size) changes."]
@@ -306,6 +324,8 @@ def main(args):
         "comps_median": comps_median,
         "shortlist": shortlist,
         "data_flags": data_flags,
+        "setup_hint": setup_hint,
+        "snapshot_coverage": screen_meta.get("snapshot_coverage"),
         **orch.model_meta(ranked),
         "report": report,
         "summary": summary,

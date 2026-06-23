@@ -238,6 +238,21 @@ def main(args):
     matches = matches[: args.limit]
     criteria = {k: v for k, v in vars(args).items()
                 if v not in (None, False) and k not in ("use_snapshot",)}
+    # Partial coverage = the snapshot index isn't fully built. Surface a clear,
+    # actionable hint so a thin result reads as "index not warmed yet", NOT as "no
+    # such names exist" (the failure that led to hand-seeding tickers).
+    setup_hint = None
+    if snapshot_coverage:
+        frac = snapshot_coverage["snapshot_names"] / max(1, snapshot_coverage["universe"])
+        if frac < 0.6:
+            setup_hint = (
+                f"PARTIAL INDEX: the size-aware snapshot covers only "
+                f"{snapshot_coverage['snapshot_names']} of {snapshot_coverage['universe']} "
+                "names, so this screen is incomplete — a thin result here does NOT mean no "
+                "such companies exist. Build the index once (a few minutes, then cached): "
+                "`python -m imdata.screener --refresh --max-names 3000` (repeat to page the "
+                "whole universe), then re-run this screen.")
+
     summary = f"{len(matches)} match(es) for criteria {criteria}."
     if truncated:
         summary += (f" Candidate set truncated to {args.max_fetch} for the expensive "
@@ -245,6 +260,8 @@ def main(args):
     elif snapshot_coverage:
         summary += (f" Filtered over {snapshot_coverage['snapshot_names']} of "
                     f"{snapshot_coverage['universe']} names in the size-aware snapshot.")
+        if setup_hint:
+            summary += " ⚠ Index partial — see setup_hint."
     out = {
         "criteria": criteria,
         "matches": matches,
@@ -255,6 +272,8 @@ def main(args):
     }
     if warmed:
         out["warmed"] = warmed
+    if setup_hint:
+        out["setup_hint"] = setup_hint
     return out
 
 

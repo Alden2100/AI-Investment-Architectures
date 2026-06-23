@@ -14,7 +14,14 @@ while _d != os.path.dirname(_d):
     if os.path.isdir(os.path.join(_d, "skills-library")):
         LIB = os.path.join(_d, "skills-library"); break
     _d = os.path.dirname(_d)
-DATA_DIR = os.path.join(HERE, "data"); os.makedirs(DATA_DIR, exist_ok=True)
+def _writable_dir(_p):
+    """Use _p if writable, else a per-user cache dir (read-only plugin installs /
+    OneDrive-synced trees where SQLite can't open a DB next to the code)."""
+    try:
+        os.makedirs(_p, exist_ok=True); _t = os.path.join(_p, ".w"); open(_t, "w").close(); os.remove(_t); return _p
+    except OSError:
+        _a = os.path.join(os.path.expanduser("~"), ".cache", "im-ai-skills", os.path.basename(HERE)); os.makedirs(_a, exist_ok=True); return _a
+DATA_DIR = _writable_dir(os.path.join(HERE, "data"))
 _envf = os.path.join(os.path.dirname(LIB), ".env")
 if os.path.exists(_envf):
     for _ln in open(_envf):

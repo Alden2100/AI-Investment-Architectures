@@ -27,7 +27,23 @@ import sys
 # ---- locate the shared library (set env BEFORE importing it) ----------------
 HERE = os.path.dirname(os.path.realpath(__file__))
 LIB = os.path.join(HERE, "skills-library")
-CACHE = os.path.join(HERE, ".cache"); os.makedirs(CACHE, exist_ok=True)
+
+
+def _writable_dir(preferred, tag):
+    """Use `preferred` if writable, else a per-user cache dir. Handles read-only
+    plugin installs and OneDrive/iCloud-synced trees where SQLite can't open a DB
+    next to the code."""
+    try:
+        os.makedirs(preferred, exist_ok=True)
+        _t = os.path.join(preferred, ".w"); open(_t, "w").close(); os.remove(_t)
+        return preferred
+    except OSError:
+        alt = os.path.join(os.path.expanduser("~"), ".cache", "im-ai-skills", tag)
+        os.makedirs(alt, exist_ok=True)
+        return alt
+
+
+CACHE = _writable_dir(os.path.join(HERE, ".cache"), "ask")
 _envf = os.path.join(HERE, ".env")
 if os.path.exists(_envf):
     for _ln in open(_envf):

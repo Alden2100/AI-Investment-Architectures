@@ -11,8 +11,24 @@ from pathlib import Path
 # Project root = parent of this `data/` package.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _default_cache_dir() -> Path:
+    """A writable, LOCAL (non-synced) per-user cache.
+
+    Never default to the package tree: when the project is installed as a Cowork
+    plugin (read-only) or lives on OneDrive/iCloud (a synced virtual filesystem
+    where SQLite can't create its WAL/SHM files), writing the DB next to the code
+    fails with 'read-only file system' / 'disk I/O error'. ``TOOLBOX_CACHE_DIR``
+    still overrides for tests/sandboxes."""
+    env = os.environ.get("TOOLBOX_CACHE_DIR")
+    if env:
+        return Path(env)
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return Path(base) / "im-ai-skills"
+
+
 # Everything cached on disk goes here (SQLite DB lives inside).
-CACHE_DIR = Path(os.environ.get("TOOLBOX_CACHE_DIR", PROJECT_ROOT / ".cache"))
+CACHE_DIR = _default_cache_dir()
 DB_PATH = Path(os.environ.get("TOOLBOX_DB_PATH", CACHE_DIR / "toolbox.db"))
 
 # SEC requires a descriptive User-Agent with contact info. Override via env if
@@ -50,4 +66,18 @@ COMMERCIAL_MODE = os.environ.get("IM_COMMERCIAL_MODE", "") not in ("", "0", "fal
 
 
 def ensure_cache_dir() -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    """Create the cache dir, falling back to a temp dir if it isn't writable (last-
+    ditch so the data layer never hard-crashes on a locked filesystem)."""
+    global CACHE_DIR, DB_PATH
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _probe = CACHE_DIR / ".write-test"
+        _probe.touch()
+        _probe.unlink()
+    except OSError:
+        if os.environ.get("TOOLBOX_DB_PATH"):
+            return  # caller pinned an explicit DB path; respect it
+        import tempfile
+        CACHE_DIR = Path(tempfile.gettempdir()) / "im-ai-skills"
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        DB_PATH = CACHE_DIR / "toolbox.db"
