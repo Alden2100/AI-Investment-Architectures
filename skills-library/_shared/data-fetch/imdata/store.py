@@ -106,6 +106,25 @@ CREATE TABLE IF NOT EXISTS audit_log (
     target    TEXT,
     detail    TEXT
 );
+
+-- Size-aware screener snapshot: slow-changing per-company metrics, kept separate
+-- from `companies` (identity) so metrics can be refreshed without touching identity.
+-- Lets a screen filter market-cap / SIC / ADV across the WHOLE universe instantly,
+-- with no per-name fetches and no top-down truncation at screen time.
+CREATE TABLE IF NOT EXISTS company_metrics (
+    ticker          TEXT PRIMARY KEY,
+    market_cap      REAL,
+    sic             INTEGER,
+    sic_description TEXT,
+    adv             REAL,        -- avg daily $ volume
+    last_px         REAL,
+    currency        TEXT,
+    country         TEXT,        -- business-address country ('US' or a foreign code) for --us-only
+    source          TEXT,        -- how market_cap was derived (sec / vendor / none)
+    note            TEXT,        -- why a metric is null (so names are never silently dropped)
+    snapshot_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_mcap ON company_metrics(market_cap);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -123,8 +142,18 @@ def get_conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA busy_timeout=30000")
         _conn.executescript(_SCHEMA)
+        _migrate(_conn)
         _conn.commit()
     return _conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive column migrations (CREATE TABLE IF NOT EXISTS won't add columns to a
+    pre-existing table). Safe to run on every open."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(company_metrics)")}
+    for col, decl in (("country", "TEXT"), ("note", "TEXT"), ("source", "TEXT")):
+        if col not in have:
+            conn.execute(f"ALTER TABLE company_metrics ADD COLUMN {col} {decl}")
 
 
 @contextmanager
@@ -244,9 +273,17 @@ def upsert_companies(rows: Iterable[dict]) -> None:
 
 
 def company_by_ticker(ticker: str) -> Optional[sqlite3.Row]:
-    return get_conn().execute(
-        "SELECT * FROM companies WHERE ticker = ? COLLATE NOCASE", (ticker.upper(),)
-    ).fetchone()
+    conn = get_conn()
+    t = (ticker or "").upper().strip()
+    row = conn.execute(
+        "SELECT * FROM companies WHERE ticker = ? COLLATE NOCASE", (t,)).fetchone()
+    if row is None and ("." in t or "-" in t):
+        # SEC class-share tickers use a hyphen (BRK-B); users/vendors often write a
+        # dot (BRK.B). Try the other separator before giving up.
+        alt = t.replace(".", "-") if "." in t else t.replace("-", ".")
+        row = conn.execute(
+            "SELECT * FROM companies WHERE ticker = ? COLLATE NOCASE", (alt,)).fetchone()
+    return row
 
 
 def all_companies() -> list[sqlite3.Row]:
@@ -255,6 +292,71 @@ def all_companies() -> list[sqlite3.Row]:
 
 def companies_count() -> int:
     return get_conn().execute("SELECT COUNT(*) AS n FROM companies").fetchone()["n"]
+
+
+# --------------------------------------------------------------------------- #
+# Size-aware screener snapshot (company_metrics)
+# --------------------------------------------------------------------------- #
+_METRIC_COLS = ("ticker", "market_cap", "sic", "sic_description", "adv",
+                "last_px", "currency", "country", "source", "note", "snapshot_at")
+
+
+def upsert_metrics(rows: Iterable[dict]) -> None:
+    now = _now_iso()
+    payload = []
+    for r in rows:
+        rec = {k: r.get(k) for k in _METRIC_COLS}
+        rec["ticker"] = (rec["ticker"] or "").upper()
+        rec["snapshot_at"] = rec["snapshot_at"] or now
+        payload.append(rec)
+    with _tx() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO company_metrics "
+            "(ticker, market_cap, sic, sic_description, adv, last_px, currency, "
+            " country, source, note, snapshot_at) VALUES "
+            "(:ticker, :market_cap, :sic, :sic_description, :adv, :last_px, "
+            " :currency, :country, :source, :note, :snapshot_at)",
+            payload,
+        )
+
+
+def metrics_for_tickers(tickers: Iterable[str]) -> list[sqlite3.Row]:
+    ts = [t.upper() for t in tickers]
+    if not ts:
+        return []
+    qs = ",".join("?" * len(ts))
+    return get_conn().execute(
+        f"SELECT m.*, c.title FROM company_metrics m "
+        f"LEFT JOIN companies c ON c.ticker = m.ticker "
+        f"WHERE m.ticker IN ({qs})", ts
+    ).fetchall()
+
+
+def all_metrics() -> list[sqlite3.Row]:
+    """Every snapshot row, joined to the company title (LEFT JOIN: title may be None)."""
+    return get_conn().execute(
+        "SELECT m.*, c.title FROM company_metrics m "
+        "LEFT JOIN companies c ON c.ticker = m.ticker"
+    ).fetchall()
+
+
+def metrics_count() -> int:
+    return get_conn().execute("SELECT COUNT(*) AS n FROM company_metrics").fetchone()["n"]
+
+
+def stale_tickers(ttl_seconds: int, limit: int) -> list[str]:
+    """Tickers needing a snapshot refresh: never-snapshotted first, then stalest.
+    Pages through the whole universe over repeated calls (resumable warm)."""
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           time.gmtime(time.time() - max(0, ttl_seconds)))
+    rows = get_conn().execute(
+        "SELECT c.ticker AS ticker FROM companies c "
+        "LEFT JOIN company_metrics m ON m.ticker = c.ticker "
+        "WHERE m.ticker IS NULL OR m.snapshot_at IS NULL OR m.snapshot_at < ? "
+        "ORDER BY (m.snapshot_at IS NULL) DESC, m.snapshot_at ASC "
+        "LIMIT ?", (cutoff, int(limit))
+    ).fetchall()
+    return [r["ticker"] for r in rows]
 
 
 # --------------------------------------------------------------------------- #

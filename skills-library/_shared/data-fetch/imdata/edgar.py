@@ -127,6 +127,14 @@ def latest_filing(ticker: str, form: str):
     return rows[0] if rows else None
 
 
+# US state / territory codes EDGAR uses in business addresses (anything else in that
+# field is a foreign country code → a foreign private issuer / ADR).
+_US_STATES = frozenset(
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT "
+    "NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC PR "
+    "GU VI AS MP".split())
+
+
 def company_meta(ticker: str, force: bool = False) -> dict:
     """Company metadata from the submissions endpoint: SIC/sector, exchanges, etc."""
     info = universe.resolve(ticker)
@@ -135,6 +143,12 @@ def company_meta(ticker: str, force: bool = False) -> dict:
         ttl=config.TTL_SUBMISSIONS,
         force=force,
     )
+    # Business-address state/country distinguishes US filers from foreign private
+    # issuers (20-F / ADRs). EDGAR uses US state codes (CA, NY…) for domestic and
+    # ISO-ish country codes for foreign; map a US state -> "US", else keep the code.
+    biz = ((data.get("addresses") or {}).get("business") or {})
+    soc = biz.get("stateOrCountry") or data.get("stateOfIncorporation") or ""
+    country = "US" if soc in _US_STATES else (soc or None)
     return {
         "ticker": info["ticker"],
         "cik": info["cik"],
@@ -144,6 +158,8 @@ def company_meta(ticker: str, force: bool = False) -> dict:
         "exchanges": data.get("exchanges"),
         "fiscal_year_end": data.get("fiscalYearEnd"),
         "state": data.get("stateOfIncorporation"),
+        "business_state_or_country": soc or None,
+        "country": country,
     }
 
 

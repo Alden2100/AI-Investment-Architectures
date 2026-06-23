@@ -32,6 +32,9 @@ TTL_FILING_TEXT = int(os.environ.get("TTL_FILING_TEXT", str(30 * 24 * 3600)))
 TTL_PRICES = int(os.environ.get("TTL_PRICES", str(12 * 3600)))
 TTL_NEWS = int(os.environ.get("TTL_NEWS", str(2 * 3600)))
 TTL_UNIVERSE = int(os.environ.get("TTL_UNIVERSE", str(7 * 24 * 3600)))
+# Size-aware screener snapshot (imdata/screener.py): market cap / SIC change slowly,
+# so a 7-day snapshot is fine; ADV / last_px recompute cheaply from the prices cache.
+TTL_METRICS = int(os.environ.get("TTL_METRICS", str(7 * 24 * 3600)))
 # Broadened-coverage sources (see imdata/sources.py).
 TTL_MACRO = int(os.environ.get("TTL_MACRO", str(12 * 3600)))
 TTL_DAMODARAN = int(os.environ.get("TTL_DAMODARAN", str(30 * 24 * 3600)))   # annual dataset
