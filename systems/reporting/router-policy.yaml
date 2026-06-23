@@ -1,17 +1,16 @@
-# reporting router policy.
-# Drafting the final memo/letter is the highest-judgment, client-facing step ->
-# Claude. (qwen fallback still produces a usable draft keyless, for local testing.)
-# Any upstream summarization of source material stays local.
-default: claude
+# reporting router policy — qwen → sonnet → opus ladder.
+# Drafting the final memo/letter is the highest-judgment, client-facing step -> opus.
+# Upstream synthesis/reasoning is basic judgment -> sonnet. Bulk text work -> qwen.
+default: opus
 allow_local_fallback: true
 allow_claude_fallback: true
 
 routes:
-  classification: local
-  extraction:     local
-  screening:      local
-  summarization:  local
-  reasoning:      claude
-  synthesis:      claude
-  drafting:       claude        # the memo / investor letter (final, client-facing)
-  judgment:       claude
+  classification: qwen
+  extraction:     qwen
+  screening:      qwen
+  summarization:  qwen
+  reasoning:      sonnet
+  synthesis:      sonnet
+  drafting:       opus          # the memo / investor letter (final, client-facing)
+  judgment:       opus

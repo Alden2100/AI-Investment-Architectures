@@ -1,13 +1,15 @@
-# Scaffold policy: firm default split. Cheap/bulk -> local qwen; judgment -> Claude.
-default: claude
+# governance-audit router policy — qwen → sonnet → opus ladder.
+# Bulk/cheap -> qwen. The governance narrative is basic judgment -> sonnet; the
+# confidence guard promotes a weak read to opus.
+default: sonnet
 allow_local_fallback: true
 allow_claude_fallback: true
 routes:
-  classification: local
-  extraction: local
-  screening: local
-  summarization: local
-  reasoning: claude
-  synthesis: claude
-  drafting: claude
-  judgment: claude
+  classification: qwen
+  extraction: qwen
+  screening: qwen
+  summarization: qwen
+  reasoning: sonnet
+  synthesis: sonnet
+  drafting: sonnet
+  judgment: sonnet

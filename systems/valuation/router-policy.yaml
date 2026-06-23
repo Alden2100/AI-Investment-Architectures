@@ -1,17 +1,17 @@
-# valuation router policy.
+# valuation router policy — qwen → sonnet → opus ladder.
 # Every number (DCF, comps, scenarios) is computed in Python by the skills. The model
-# does one thing: reconcile the three methods into a range + recommendation. That's
-# reasoning/judgment -> Claude (qwen fallback keeps it runnable keyless).
-default: claude
+# only narrates: reconcile the three methods into a range + recommendation. The
+# narrative steps run on sonnet; the confidence guard promotes a weak read to opus.
+default: sonnet
 allow_local_fallback: true
 allow_claude_fallback: true
 
 routes:
-  classification: local
-  extraction:     local
-  screening:      local
-  summarization:  local
-  reasoning:      claude        # triangulate DCF vs comps vs scenarios
-  synthesis:      claude
-  drafting:       claude
-  judgment:       claude
+  classification: qwen
+  extraction:     qwen
+  screening:      qwen
+  summarization:  qwen
+  reasoning:      sonnet        # triangulate DCF vs comps vs scenarios
+  synthesis:      sonnet
+  drafting:       sonnet
+  judgment:       sonnet

@@ -1,13 +1,15 @@
-# Scaffold policy: firm default split. Cheap/bulk -> local qwen; judgment -> Claude.
-default: claude
+# due-diligence router policy — qwen → sonnet → opus ladder.
+# Client-facing DD brief: the core reasoning (segments + insider + sanctions + ROIC)
+# is the hardest step -> opus; the rest of the narrative -> sonnet; bulk -> qwen.
+default: opus
 allow_local_fallback: true
 allow_claude_fallback: true
 routes:
-  classification: local
-  extraction: local
-  screening: local
-  summarization: local
-  reasoning: claude
-  synthesis: claude
-  drafting: claude
-  judgment: claude
+  classification: qwen
+  extraction: qwen
+  screening: qwen
+  summarization: qwen
+  reasoning: opus
+  synthesis: sonnet
+  drafting: opus
+  judgment: opus

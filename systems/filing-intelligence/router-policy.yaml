@@ -1,16 +1,17 @@
-# filing-intelligence router policy.
-# Filings are long: summarize/extract cheaply on local qwen3.5:9b; reserve the
-# multi-lens synthesis (the Brief) and competitive reasoning for Claude.
-default: claude
+# filing-intelligence router policy — qwen → sonnet → opus ladder.
+# Filings are long: summarize/extract cheaply on qwen (the length guard promotes a
+# too-big filing automatically). The multi-lens Brief and competitive read are the
+# hardest synthesis here -> opus.
+default: opus
 allow_local_fallback: true
 allow_claude_fallback: true
 
 routes:
-  classification: local
-  extraction:     local        # pull structured bits from filing text
-  screening:      local
-  summarization:  local        # filing-summarizer / earnings-call-summarizer (high volume)
-  synthesis:      claude        # the Brief — reconcile three lenses (judgment)
-  reasoning:      claude        # moat-analyzer competitive read
-  drafting:       claude
-  judgment:       claude
+  classification: qwen
+  extraction:     qwen          # pull structured bits from filing text
+  screening:      qwen
+  summarization:  qwen          # filing-summarizer / earnings-call-summarizer (high volume)
+  synthesis:      opus          # the Brief — reconcile three lenses (hardest judgment)
+  reasoning:      opus          # moat-analyzer competitive read
+  drafting:       opus
+  judgment:       opus

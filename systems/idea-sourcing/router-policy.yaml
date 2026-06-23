@@ -1,18 +1,17 @@
-# idea-sourcing router policy (POLICY, not mechanism).
-# The engine in _shared/router is identical everywhere; this file is the only thing
-# that differs. Bulk/cheap work -> local qwen3.5:9b (free, on-box). The one judgment
-# that benefits from a strong model -> Claude (with qwen fallback when no API key,
-# so the system still runs end-to-end keyless).
-default: claude
-allow_local_fallback: true     # no ANTHROPIC_API_KEY -> use qwen instead of stalling
-allow_claude_fallback: true    # Ollama down -> use Claude instead of stalling
+# idea-sourcing router policy — qwen → sonnet → opus ladder (POLICY, not mechanism).
+# Bulk/cheap work -> qwen. Ranking the dossier into a shortlist is basic judgment ->
+# sonnet; the engine's confidence guard promotes a low-confidence / invalid ranking
+# one rung to opus automatically.
+default: opus
+allow_local_fallback: true     # a Claude rung down -> use qwen instead of stalling
+allow_claude_fallback: true    # Ollama down -> step up to Claude instead of stalling
 
 routes:
-  classification: local        # catalyst-flagger event tagging
-  extraction:     local
-  screening:      local        # universe screening pre-filter
-  summarization:  local        # news / headline digestion
-  synthesis:      claude        # ranking the dossier into a shortlist (judgment)
-  reasoning:      claude
-  drafting:       claude
-  judgment:       claude
+  classification: qwen          # catalyst-flagger event tagging
+  extraction:     qwen
+  screening:      qwen          # universe screening pre-filter
+  summarization:  qwen          # news / headline digestion
+  synthesis:      sonnet        # ranking the dossier into a shortlist (confidence guard promotes hard ones)
+  reasoning:      sonnet
+  drafting:       opus
+  judgment:       opus
