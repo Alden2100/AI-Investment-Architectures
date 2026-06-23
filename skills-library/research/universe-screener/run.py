@@ -56,6 +56,11 @@ def _adv(ticker, days=30):
 # {"desc": [...], "sic": [<code prefixes>]}. Code prefixes are precise where a
 # description substring would over-match (e.g. "defense" via "aircraft"/"tank").
 SECTOR_SYNONYMS = {
+    # Software hides under several SICs: 7372 prepackaged, 7370 computer services
+    # (where many internet/SaaS names + Alphabet sit), 7371 programming services,
+    # 7389 services-NEC. A bare "software" substring only matches 7372 — miss the rest.
+    "software": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
+    "saas": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
     "biotech": ["biological", "life sciences", "physical & biological research",
                 "in vitro & in vivo"],
     "biotechnology": ["biological", "life sciences", "physical & biological research"],

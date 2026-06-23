@@ -19,7 +19,7 @@ for _p in ("data-fetch", "router", "web-search"):
     if os.path.isdir(_cand) and _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from imdata import skillkit, edgar, news, universe
+from imdata import skillkit, edgar, estimates, news, universe
 from imrouter import route as _route
 
 SCHEMA = {
@@ -34,13 +34,21 @@ SCHEMA = {
                     "type": {"type": "string",
                              "description": "Catalyst type, e.g. earnings / M&A / "
                                             "product / guidance / regulatory / management / macro"},
+                    "source": {"type": "string", "enum": ["sec_filing", "analyst", "news", "price_action", "other"],
+                               "description": "Where it came from: an SEC 8-K (sec_filing), a "
+                                              "sell-side action (analyst), a news event (news), pure "
+                                              "price/sentiment like 'oversold'/'52-wk low' (price_action), else other"},
+                    "hard_event": {"type": "boolean",
+                                   "description": "True only for a concrete corporate EVENT (earnings, "
+                                                  "guidance, M&A, contract win, buyback, management change, "
+                                                  "regulatory action). False for opinion/sentiment/price-action."},
                     "date": {"type": "string", "description": "Relevant/expected date or 'unknown'"},
                     "confidence": {"type": "number",
                                    "description": "0..1 confidence this is a real catalyst"},
                     "rationale": {"type": "string",
                                   "description": "Why, citing the specific filing or headline"},
                 },
-                "required": ["ticker", "type", "confidence", "rationale"],
+                "required": ["ticker", "type", "source", "hard_event", "confidence", "rationale"],
             },
         },
         "summary": {"type": "string", "description": "One-paragraph cross-ticker takeaway"},
@@ -50,10 +58,16 @@ SCHEMA = {
 
 SYSTEM = (
     "You are an event-driven equity analyst. From the provided signals (recent 8-K "
-    "filings and news headlines per ticker), identify and label potential catalysts. "
-    "Only use the supplied signals; do not invent events or figures. Assign each "
-    "catalyst a type, a date if stated, a 0..1 confidence, and a rationale that cites "
-    "the specific filing date/form or headline it is based on."
+    "filings, news headlines, and any known upcoming earnings date per ticker), label "
+    "potential catalysts. Only use the supplied signals; do not invent events or figures.\n"
+    "Classify each by `source` and set `hard_event` TRUE only for a concrete corporate "
+    "event (earnings, guidance, M&A, contract win, buyback, management change, regulatory "
+    "action — usually an 8-K). Set it FALSE for opinion/sentiment/price-action: an analyst "
+    "blog/'thesis' piece, 'oversold'/'52-week-low'/'momentum' framing, or a generic news "
+    "mention — these are NOT catalysts; give them low confidence and source price_action/"
+    "news/analyst. Prefer hard events; a known upcoming earnings date is a real forward "
+    "catalyst. Give each a type, date if stated, 0..1 confidence, and a rationale citing "
+    "the specific filing date/form or headline."
 )
 
 
@@ -65,9 +79,16 @@ def main(args):
         ticker = info["ticker"]
         filings = skillkit.as_dicts(edgar.list_filings(ticker, form="8-K", limit=5) or [])
         news_rows = skillkit.as_dicts(news.get_news(ticker, lookback_days=args.lookback) or [])
-        signal_counts[ticker] = {"filings": len(filings), "news": len(news_rows)}
+        try:
+            earn_date = estimates.next_earnings_date(ticker)
+        except Exception:
+            earn_date = None
+        signal_counts[ticker] = {"filings": len(filings), "news": len(news_rows),
+                                 "next_earnings": earn_date}
 
         lines = [f"### {info['title']} ({ticker})"]
+        if earn_date:
+            lines.append(f"Known upcoming earnings date (forward catalyst): {earn_date}")
         lines.append("Recent 8-K filings:")
         if filings:
             for f in filings:

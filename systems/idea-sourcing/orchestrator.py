@@ -70,11 +70,17 @@ def screen(args):
     for m in matches:
         f = skillkit.call_skill("fundamentals-fetcher",
                                 ["--ticker", m["ticker"], "--items", "revenue",
-                                 "net_income", "operating_income"])
+                                 "net_income", "operating_income", "gross_profit",
+                                 "free_cash_flow", "operating_cash_flow", "cash", "total_debt"])
+        fin = f.get("financials", {}) or {}
         cands.append({"ticker": m["ticker"], "company": m.get("title"),
                       "market_cap": m.get("market_cap"),
-                      "revenue": f.get("financials", {}).get("revenue"),
-                      "net_income": f.get("financials", {}).get("net_income")})
+                      "revenue": fin.get("revenue"),
+                      "net_income": fin.get("net_income"),
+                      "operating_income": fin.get("operating_income"),
+                      "gross_profit": fin.get("gross_profit"),
+                      "free_cash_flow": fin.get("free_cash_flow") or fin.get("operating_cash_flow"),
+                      "cash": fin.get("cash"), "total_debt": fin.get("total_debt")})
     # Carry the screener's coverage/setup signal so a partial-index run isn't read as
     # "no such names" downstream.
     return cands, {"setup_hint": screened.get("setup_hint"),
@@ -121,6 +127,21 @@ def enrich(cands):
         c["earnings_growth"] = cm.get("earnings_growth")
         c["net_margin"] = cm.get("net_margin")
         c["peg"] = cm.get("peg")
+        # Software-relevant quality metrics: gross/operating/FCF margin, Rule-of-40,
+        # net cash — the things that actually justify a software multiple. Computed
+        # deterministically from the fundamentals pulled in screen().
+        rev = c.get("revenue")
+        _m = lambda num: (num / rev) if (isinstance(num, (int, float)) and rev) else None
+        c["gross_margin"] = _m(c.get("gross_profit"))
+        c["operating_margin"] = _m(c.get("operating_income"))
+        c["fcf_margin"] = _m(c.get("free_cash_flow"))
+        # Rule of 40 = revenue growth % + FCF (or operating) margin %.
+        _rg = c.get("revenue_growth")
+        _pm = c.get("fcf_margin") if c.get("fcf_margin") is not None else c.get("operating_margin")
+        c["rule_of_40"] = (round((_rg + _pm) * 100, 1)
+                           if isinstance(_rg, (int, float)) and isinstance(_pm, (int, float)) else None)
+        if isinstance(c.get("cash"), (int, float)) or isinstance(c.get("total_debt"), (int, float)):
+            c["net_cash"] = (c.get("cash") or 0) - (c.get("total_debt") or 0)
         if not c.get("market_cap"):          # fill from comps when the screen didn't fetch it
             c["market_cap"] = cm.get("market_cap")
         # Insider (Form 4) smart-money signal — net open-market buying/selling.
@@ -139,6 +160,77 @@ def enrich(cands):
     return comps.get("median", {})
 
 
+# --------------------------------------------------------------------------- #
+# Deterministic composite score — the systemic fix for "the crude DCF leaks out as
+# the headline number." Every factor is computed in Python (per the invariant: code
+# for what's exact); the model ranks WITH this anchor and explains it, rather than
+# inventing an ordering from a +104% single-stage DCF artifact.
+# --------------------------------------------------------------------------- #
+def _minmax(vals: dict, invert: bool = False) -> dict:
+    """ticker->value (None ok) -> ticker->0..1 by min-max across the set; None stays
+    None. invert=True for 'lower is better' (cheapness, PEG)."""
+    nums = [v for v in vals.values() if isinstance(v, (int, float))]
+    if not nums:
+        return {k: None for k in vals}
+    lo, hi = min(nums), max(nums)
+    out = {}
+    for k, v in vals.items():
+        if not isinstance(v, (int, float)):
+            out[k] = None
+        else:
+            x = 0.5 if hi == lo else (v - lo) / (hi - lo)
+            out[k] = (1 - x) if invert else x
+    return out
+
+
+def _blend(*factor_maps):
+    """Average the available (non-None) sub-factors per ticker -> ticker->0..1."""
+    tickers = factor_maps[0].keys()
+    out = {}
+    for t in tickers:
+        avail = [fm[t] for fm in factor_maps if isinstance(fm.get(t), (int, float))]
+        out[t] = sum(avail) / len(avail) if avail else 0.5  # neutral when nothing known
+    return out
+
+
+_SCORE_WEIGHTS = {"value": 0.30, "growth": 0.25, "quality": 0.25,
+                  "catalyst": 0.10, "momentum": 0.10}
+
+
+def score_candidates(cands: list) -> None:
+    """Attach per-candidate sub-scores (0-100) + a weighted composite, in place."""
+    def col(key):
+        return {c["ticker"]: c.get(key) for c in cands}
+
+    def cat_count(c):
+        sig = c.get("catalyst_signals") or {}
+        base = sum(v for v in sig.values() if isinstance(v, (int, float)))  # next_earnings is a str
+        cats = c.get("catalysts") or []
+        hard = sum(1 for ev in cats if isinstance(ev, dict) and ev.get("hard_event"))
+        return base + len(cats) + hard * 2   # weight concrete events above headline noise
+
+    def insider_pts(c):
+        s = (c.get("insider_signal") or "")
+        return 1.0 if "buy" in s else 0.0 if "sell" in s else 0.5
+
+    value = _blend(_minmax(col("peg"), invert=True),
+                   _minmax(col("ev_ebitda"), invert=True),
+                   _minmax(col("target_upside")))
+    growth = _blend(_minmax(col("revenue_growth")), _minmax(col("earnings_growth")))
+    quality = _blend(_minmax(col("gross_margin")), _minmax(col("operating_margin")),
+                     _minmax(col("rule_of_40")), _minmax(col("net_margin")))
+    catalyst = _minmax({c["ticker"]: cat_count(c) for c in cands})
+    momentum = _blend(_minmax(col("target_upside")),
+                      {c["ticker"]: insider_pts(c) for c in cands})
+    for c in cands:
+        t = c["ticker"]
+        sub = {"value": value[t], "growth": growth[t], "quality": quality[t],
+               "catalyst": catalyst[t] if catalyst[t] is not None else 0.5, "momentum": momentum[t]}
+        composite = sum(_SCORE_WEIGHTS[k] * (sub[k] if sub[k] is not None else 0.5) for k in _SCORE_WEIGHTS)
+        c["scores"] = {k: round(v * 100) if isinstance(v, (int, float)) else None for k, v in sub.items()}
+        c["composite_score"] = round(composite * 100)
+
+
 def main(args):
     if not (args.ticker_in or args.name_contains or args.sic_contains
             or args.min_mcap or args.max_mcap):
@@ -155,6 +247,7 @@ def main(args):
         return {"candidates": [], "summary": msg,
                 "setup_hint": setup_hint, "snapshot_coverage": screen_meta.get("snapshot_coverage")}
     comps_median = enrich(cands)
+    score_candidates(cands)   # deterministic composite + sub-scores anchor the ranking
 
     # Content-rich view for the ranking model — the ACTUAL catalysts (type/date/
     # rationale) and recent headlines, not counts, so each thesis can name a real
@@ -163,6 +256,7 @@ def main(args):
         out = []
         for ev in (c.get("catalysts") or [])[:5]:
             out.append({"type": ev.get("type"), "date": ev.get("date"),
+                        "source": ev.get("source"), "hard_event": ev.get("hard_event"),
                         "confidence": ev.get("confidence"),
                         "rationale": (ev.get("rationale") or "")[:240]})
         return out
@@ -173,7 +267,10 @@ def main(args):
              "current_price": c.get("current_price"),
              "ev_ebitda": c.get("ev_ebitda"), "pe": c.get("pe"), "ps": c.get("ps"),
              "revenue_growth": c.get("revenue_growth"), "earnings_growth": c.get("earnings_growth"),
-             "net_margin": c.get("net_margin"), "peg": c.get("peg"),
+             "net_margin": c.get("net_margin"), "gross_margin": c.get("gross_margin"),
+             "operating_margin": c.get("operating_margin"), "fcf_margin": c.get("fcf_margin"),
+             "rule_of_40": c.get("rule_of_40"), "peg": c.get("peg"),
+             "composite_score": c.get("composite_score"), "scores": c.get("scores"),
              "street_target_mean": c.get("target_mean"),
              "street_target_upside": c.get("target_upside"),
              "street_recommendation": c.get("recommendation"),
@@ -190,13 +287,19 @@ def main(args):
         "rationale) and recent headlines — your 'thesis' must name a specific driver (a "
         "real catalyst or headline) plus the relative-valuation case, NOT a count or a "
         "tautology.\n"
+        "RANK PRIMARILY on the deterministic 'composite_score' (0-100) and its 'scores' "
+        "sub-factors {value, growth, quality, catalyst, momentum} — these already blend "
+        "the figures below into one comparable number, so your ordering should track the "
+        "composite unless you can argue, with a specific figure, why it's wrong. Each "
+        "thesis must name the DRIVING sub-factor (e.g. 'top quality: 78% gross margin + "
+        "Rule-of-40 of 52' or 'cheapest: PEG 0.9 vs peers') plus a real catalyst.\n"
         "IMPORTANT valuation guidance: the absolute 'dcf_upside' is a crude single-stage "
         "screen and is UNRELIABLE for high-growth names (it will show deep negatives for "
-        "hyper-growth compounders) — do NOT treat it as fair value. Anchor the relative "
-        "call on growth-adjusted multiples (pe/ev_ebitda vs comps_median, peg), "
-        "revenue/earnings growth, net_margin, catalysts, and where the name sits vs Street "
-        "consensus (street_target_upside, street_recommendation: cheap on our numbers but "
-        "Street already there = crowded; not-yet-consensus = potentially early). If a "
+        "hyper-growth compounders) — do NOT treat it as fair value or lead with it. Anchor "
+        "on the composite, growth-adjusted multiples (pe/ev_ebitda vs comps_median, peg), "
+        "revenue/earnings growth, margins + Rule-of-40, catalysts, and where the name sits "
+        "vs Street consensus (street_target_upside, street_recommendation: cheap on our "
+        "numbers but Street already there = crowded; not-yet-consensus = potentially early). If a "
         "candidate has non-empty 'data_flags', explicitly CAVEAT that name's numbers as "
         "possibly unreliable and lower your confidence. 'insider_signal' (SEC Form 4) is a "
         "smart-money tell — recent net insider BUYING supports a name, sustained SELLING is "
@@ -222,26 +325,27 @@ def main(args):
         shortlist = ranked.get("shortlist") or orch.first_list(ranked)
 
     # Backfill any candidate the model dropped, so every sourced name is represented
-    # (the 9B sometimes ranks only a couple). Missing names are appended in DCF-upside
-    # order with a deterministic numeric thesis and a verdict from the numbers.
+    # (the 9B sometimes ranks only a couple). Missing names are appended in COMPOSITE-
+    # SCORE order with a deterministic thesis citing the score and a verdict from it.
     if shortlist and not ranked.get("_needs_model"):
         cand_by = {c["ticker"]: c for c in cands}
         present = {s.get("ticker") for s in shortlist if isinstance(s, dict)}
         missing = [c for c in cands if c["ticker"] not in present]
-        missing.sort(key=lambda c: (c.get("dcf_upside") is None, -(c.get("dcf_upside") or -9)))
+        missing.sort(key=lambda c: -(c.get("composite_score") or 0))
         nxt = len(shortlist)
         for c in missing:
-            up = c.get("dcf_upside")
-            verdict = ("pursue" if isinstance(up, (int, float)) and up > 0.15
-                       else "pass" if isinstance(up, (int, float)) and up < -0.2 else "watch")
+            sc = c.get("composite_score")
+            verdict = ("pursue" if isinstance(sc, (int, float)) and sc >= 60
+                       else "pass" if isinstance(sc, (int, float)) and sc < 35 else "watch")
             nxt += 1
             shortlist.append({
                 "ticker": c["ticker"], "rank": nxt, "verdict": verdict,
-                "thesis": (f"DCF upside {up:+.0%}" if isinstance(up, (int, float)) else "DCF n/a")
-                + (f", EV/EBITDA {c['ev_ebitda']:.1f}" if isinstance(c.get("ev_ebitda"), (int, float)) else "")
+                "thesis": (f"Composite {sc}/100" if isinstance(sc, (int, float)) else "composite n/a")
+                + (f", EV/EBITDA {c['ev_ebitda']:.1f}x" if isinstance(c.get("ev_ebitda"), (int, float)) else "")
+                + (f", Rule-of-40 {c['rule_of_40']:.0f}" if isinstance(c.get("rule_of_40"), (int, float)) else "")
                 + " (screened; not individually ranked by the model)."})
     # Attach the computed numbers to every shortlist row (the model schema omits them)
-    # so the table's DCF/valuation columns populate in both the terminal and the PDF.
+    # so the table/PDF columns populate in both the terminal and the PDF.
     cand_by = {c["ticker"]: c for c in cands}
     for s in shortlist:
         if isinstance(s, dict) and s.get("ticker") in cand_by:
@@ -249,10 +353,13 @@ def main(args):
             for fld in ("dcf_upside", "ev_ebitda", "pe", "ps", "current_price",
                         "market_cap", "revenue", "company",
                         "target_mean", "target_upside", "recommendation",
-                        "insider_signal", "insider_net_usd"):
+                        "insider_signal", "insider_net_usd",
+                        "composite_score", "scores", "gross_margin", "operating_margin",
+                        "fcf_margin", "rule_of_40", "revenue_growth", "net_margin",
+                        "peg", "net_cash", "valuation_caveat"):
                 s.setdefault(fld, c.get(fld))
-            sig = c.get("catalyst_signals")
-            s.setdefault("catalysts", sum(sig.values()) if isinstance(sig, dict) else 0)
+            sig = c.get("catalyst_signals") or {}
+            s.setdefault("catalysts", sum(v for v in sig.values() if isinstance(v, (int, float))))
 
     if ranked.get("_needs_model"):
         summary = (f"Sourced {len(cands)} candidate(s): "

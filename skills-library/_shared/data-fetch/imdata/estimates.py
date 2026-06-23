@@ -155,6 +155,27 @@ def get_ownership(ticker: str, *, force: bool = False) -> dict:
     return out
 
 
+def next_earnings_date(ticker: str, *, force: bool = False) -> Optional[str]:
+    """Next scheduled earnings date (YYYY-MM-DD) — a real FORWARD catalyst — or None.
+    Best-effort via yfinance; cached."""
+    key = f"earndate/{ticker.upper()}"
+    if not force:
+        cached = store.kv_get(key, ttl=_TTL)
+        if cached is not None:
+            return cached or None
+    out = None
+    try:
+        info = _yf(ticker).info or {}
+        ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
+        if ts:
+            import datetime as _dt
+            out = _dt.datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d")
+    except Exception:
+        out = None
+    store.kv_put(key, out or "")
+    return out
+
+
 def get_quote(ticker: str, *, force: bool = False) -> dict:
     """Yahoo's own reported price / market cap / shares / 52-wk range — used to
     cross-check the figures our pipeline computed. Best-effort, cached."""
