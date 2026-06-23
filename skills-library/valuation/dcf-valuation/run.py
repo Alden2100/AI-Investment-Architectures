@@ -27,7 +27,7 @@ for _p in ("data-fetch", "router", "web-search"):
     if os.path.isdir(_cand) and _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from imdata import edgar, prices, skillkit, universe
+from imdata import edgar, estimates, prices, skillkit, universe
 
 SHARES_TAGS = ["EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding"]
 DEBT_TAGS = ["LongTermDebt", "LongTermDebtNoncurrent"]
@@ -57,6 +57,34 @@ def _latest_any(ticker, tags):
         rows = [r for r in edgar.get_concept(ticker, tag) if r["value"] is not None]
         if rows:
             return rows[0]["value"]
+    return None
+
+
+def _shares_outstanding(ticker, price=None):
+    """Shares outstanding: the newest single cover-page fact, then a vendor fallback
+    (reported share count / market-cap ÷ price). Not summed across rows — companyfacts
+    can't separate share classes, so multiple rows are one class re-reported; the
+    vendor figure is the dual-class-aware total when the XBRL count is partial."""
+    for tag in SHARES_TAGS:
+        rows = [r for r in edgar.get_concept(ticker, tag) if r["value"]]
+        rows = [r for r in rows if r["period_end"]]
+        if rows:
+            # Newest SINGLE fact, not a sum (companyfacts can't separate share classes;
+            # multiple rows are one class re-reported). Dual-class totals come from the
+            # vendor fallback below / reconcile.
+            newest = max(r["period_end"] for r in rows)
+            val = float(next(r["value"] for r in rows if r["period_end"] == newest))
+            if val > 0:
+                return val
+    # Vendor fallback (Yahoo) — independent of the XBRL cover-page ambiguity.
+    try:
+        q = estimates.get_quote(ticker) or {}
+        if q.get("shares_outstanding"):
+            return float(q["shares_outstanding"])
+        if q.get("market_cap") and price:
+            return float(q["market_cap"]) / float(price)
+    except Exception:
+        pass
     return None
 
 
@@ -176,6 +204,7 @@ def _derive_wacc(ticker, *, shares, price, net_debt, args):
 
 def main(args):
     info = universe.resolve(args.ticker)
+    args.ticker = info["ticker"]   # canonical (BRK.B -> BRK-B) so price/quote feeds resolve
     edgar.refresh_facts(args.ticker)
 
     # --- base free cash flow (reported OCF - capex) unless overridden ----- #
@@ -185,16 +214,30 @@ def main(args):
     else:
         ocf = _latest_annual(args.ticker, ["NetCashProvidedByUsedInOperatingActivities"])
         capex = _latest_annual(args.ticker, ["PaymentsToAcquirePropertyPlantAndEquipment"])
-        if ocf is None or capex is None:
-            raise ValueError("Could not derive base FCF from filings; pass --base-fcf.")
-        base_fcf = ocf - capex
-        fcf_note = f"reported OCF {ocf:,.0f} - capex {capex:,.0f}"
+        if ocf is not None and capex is not None:
+            base_fcf = ocf - capex
+            fcf_note = f"reported OCF {ocf:,.0f} - capex {capex:,.0f}"
+        else:
+            # Merged / newly-public entities (e.g. Primo Brands) often lack a clean
+            # annual OCF+capex pair. Fall back: a directly-tagged FCF, else the latest
+            # OCF of ANY period less capex — rather than returning a null valuation.
+            fcf_direct = _latest_any(args.ticker, ["FreeCashFlow"])
+            ocf_any = _latest_any(args.ticker, ["NetCashProvidedByUsedInOperatingActivities"])
+            capex_any = _latest_any(args.ticker, ["PaymentsToAcquirePropertyPlantAndEquipment"])
+            if fcf_direct is not None:
+                base_fcf, fcf_note = fcf_direct, "reported FreeCashFlow (no clean annual OCF/capex)"
+            elif ocf_any is not None:
+                base_fcf = ocf_any - (capex_any or 0.0)
+                fcf_note = (f"OCF {ocf_any:,.0f} - capex {capex_any or 0:,.0f} "
+                            "(latest available period; no clean annual — merged/new entity)")
+            else:
+                raise ValueError("Could not derive base FCF from filings; pass --base-fcf.")
 
     # --- shares / price / net-debt (needed for WACC weights & the bridge) -- #
-    shares = args.shares if args.shares is not None else _latest_any(args.ticker, SHARES_TAGS)
+    price = args.price if args.price is not None else prices.last_price(args.ticker)
+    shares = args.shares if args.shares is not None else _shares_outstanding(args.ticker, price=price)
     if not shares:
         raise ValueError("Could not determine shares outstanding; pass --shares.")
-    price = args.price if args.price is not None else prices.last_price(args.ticker)
 
     if args.net_debt is not None:
         net_debt = args.net_debt

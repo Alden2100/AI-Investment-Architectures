@@ -20,7 +20,7 @@ for _p in ("data-fetch", "router", "web-search"):
     if os.path.isdir(_cand) and _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from imdata import edgar, prices, skillkit, universe
+from imdata import edgar, estimates, prices, screener, skillkit, universe
 
 SHARES_TAGS = ["EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding"]
 REVENUE_TAGS = ["RevenueFromContractWithCustomerExcludingAssessedTax", "Revenues",
@@ -44,6 +44,31 @@ def _any(ticker, tags):
         rows = [r for r in edgar.get_concept(ticker, tag) if r["value"] is not None]
         if rows:
             return rows[0]["value"]
+    return None
+
+
+def _shares_outstanding(ticker, price=None):
+    """Dual-class-robust shares: sum the cover-page classes in the newest period
+    (Boston Beer A+B), then fall back to the vendor share count / (mcap ÷ price).
+    Prevents a dual-class name from dropping out of the comp set with a null mcap."""
+    for tag in SHARES_TAGS:
+        rows = [r for r in edgar.get_concept(ticker, tag) if r["value"] and r["period_end"]]
+        if rows:
+            # Newest SINGLE fact, not a sum: companyfacts can't separate share classes,
+            # so multiple rows are one class re-reported (summing overcounts). Dual-class
+            # totals come from the vendor reconcile in screener.reconcile_mcap.
+            newest = max(r["period_end"] for r in rows)
+            val = float(next(r["value"] for r in rows if r["period_end"] == newest))
+            if val > 0:
+                return val
+    try:
+        q = estimates.get_quote(ticker) or {}
+        if q.get("shares_outstanding"):
+            return float(q["shares_outstanding"])
+        if q.get("market_cap") and price:
+            return float(q["market_cap"]) / float(price)
+    except Exception:
+        pass
     return None
 
 
@@ -93,18 +118,58 @@ def _ebitda(ticker):
     return oi + da
 
 
+def _valuation_profile(sic):
+    """Flag business models where EV/EBITDA & FCF-DCF mislead, so the ranking model
+    (and the report) don't treat a bank's, REIT's, SPAC's or BDC's multiple as
+    'cheap/rich'."""
+    s = str(sic or "")
+    if s == "6798" or s.startswith("679"):
+        return "reit", "REIT — use P/FFO; EV/EBITDA, P/E and FCF-DCF are not meaningful."
+    if s == "6770":
+        return "spac", "SPAC / blank-check — no operating business; multiples not meaningful."
+    if s in ("6726",) or s.startswith("672"):
+        return "fund", "BDC / closed-end fund — use NAV / P/B; EV/EBITDA not meaningful."
+    if s[:2] in ("60", "61", "62", "63") or s.startswith("671"):
+        return "financial", "Financial — EV/EBITDA & FCF-DCF not meaningful; use P/E, P/B."
+    return "standard", None
+
+
 def metrics(ticker):
-    edgar.refresh_facts(ticker)
     info = universe.resolve(ticker)
+    ticker = info["ticker"]   # canonical (BRK.B -> BRK-B) so the price/quote feeds resolve
+    edgar.refresh_facts(ticker)
+    try:
+        sic = edgar.company_meta(ticker).get("sic")
+    except Exception:
+        sic = None
+    val_method, val_caveat = _valuation_profile(sic)
     price = prices.last_price(ticker)
-    shares = _any(ticker, SHARES_TAGS)
+    shares = _shares_outstanding(ticker, price=price)
     revenue = _annual(ticker, REVENUE_TAGS)
     net_income = _annual(ticker, ["NetIncomeLoss"])
     ebitda = _ebitda(ticker)
     debt = _any(ticker, DEBT_TAGS) or 0.0
     cash = _any(ticker, CASH_TAGS) or 0.0
     net_debt = debt - cash
-    mcap = price * shares if (price and shares) else None
+    # Reconcile SEC shares×price against the vendor cap (same logic as the snapshot)
+    # so split/dual-class names (COKE 10x, PNC) don't carry a wrong cap into comps;
+    # when the vendor wins, re-derive shares from it so EPS / P/S stay consistent.
+    sec_mcap = price * shares if (price and shares) else None
+    try:
+        vendor_mcap = (estimates.get_quote(ticker) or {}).get("market_cap")
+    except Exception:
+        vendor_mcap = None
+    third = None
+    if (isinstance(sec_mcap, (int, float)) and sec_mcap > 0
+            and isinstance(vendor_mcap, (int, float)) and vendor_mcap > 0
+            and max(sec_mcap / vendor_mcap, vendor_mcap / sec_mcap) > screener._MCAP_DISAGREE):
+        try:
+            third = prices.independent_market_cap(ticker)
+        except Exception:
+            third = None
+    mcap, mcap_src, _ = screener.reconcile_mcap(sec_mcap, vendor_mcap, third)
+    if mcap and price and mcap_src == "vendor":
+        shares = mcap / price
     ev = mcap + net_debt if mcap is not None else None
     # Quality + growth so multiples are comparable on more than price: a 30x P/E on
     # 20% growth is not the 30x on 3% growth. PEG growth-adjusts the earnings multiple.
@@ -122,10 +187,14 @@ def metrics(ticker):
         "eps": (net_income / shares) if (net_income and shares) else None,
         "revenue_growth": rev_growth, "earnings_growth": ni_growth,
         "net_margin": net_margin,
-        "ev_ebitda": (ev / ebitda) if (ev and ebitda and ebitda > 0) else None,
+        # EV/EBITDA only for standard operating models — suppressed for financials/
+        # REITs/SPACs/BDCs where it's meaningless (don't let it read as cheap/rich).
+        "ev_ebitda": (ev / ebitda) if (ev and ebitda and ebitda > 0
+                                       and val_method == "standard") else None,
         "pe": pe,
         "ps": (mcap / revenue) if (mcap and revenue and revenue > 0) else None,
         "peg": peg,
+        "sic": sic, "valuation_method": val_method, "valuation_caveat": val_caveat,
     }
 
 
@@ -156,7 +225,9 @@ def main(args):
              "ps": round(r["ps"], 2) if r["ps"] else None,
              "peg": round(r["peg"], 2) if r["peg"] else None,
              "earnings_growth": _pct(r["earnings_growth"]),
-             "net_margin": _pct(r["net_margin"])}
+             "net_margin": _pct(r["net_margin"]),
+             "valuation_method": r.get("valuation_method"),
+             "valuation_caveat": r.get("valuation_caveat")}
             for r in table
         ],
         "median": {k: (round(v, 4) if v else None) for k, v in med.items()},
