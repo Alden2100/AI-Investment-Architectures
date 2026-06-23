@@ -53,11 +53,9 @@ def screen(args):
     if args.sic_contains:  sargs += ["--sic-contains", args.sic_contains]
     if args.min_mcap:      sargs += ["--min-mcap", args.min_mcap]
     if args.max_mcap:      sargs += ["--max-mcap", args.max_mcap]
-    # Scan deeper than the screener's default-30 when filtering by sector/size, so a
-    # sector screen reaches past the top mega-caps (companies are ordered by market
-    # cap, so this stays "large-cap" while finding more than the 2-3 biggest names).
-    if (args.sic_contains or args.min_mcap or args.max_mcap) and not args.ticker_in:
-        sargs += ["--max-fetch", "160"]
+    # Sector/size mandates now filter the size-aware snapshot across the whole
+    # universe (imdata/screener.py), so the old "--max-fetch 160" top-down hack —
+    # which only ever reached the largest names and missed every mid-cap — is gone.
     screened = skillkit.call_skill("universe-screener", sargs)
     matches = screened.get("matches", [])[:int(args.max_candidates)]
     cands = []
@@ -122,6 +120,11 @@ def enrich(cands):
         # vendor's own reported figures (share-count mismatch, currency, bad tick).
         c["data_flags"] = estimates.data_quality(
             c["ticker"], used_price=c.get("current_price"), computed_mcap=c.get("market_cap"))
+        # Business-model caveat (banks/REITs): EV/EBITDA & DCF mislead — flag so the
+        # ranking model and report don't read the multiple as cheap/rich.
+        c["valuation_caveat"] = cm.get("valuation_caveat")
+        if c["valuation_caveat"]:
+            c["data_flags"] = (c["data_flags"] or []) + [c["valuation_caveat"]]
     return comps.get("median", {})
 
 
@@ -227,7 +230,8 @@ def main(args):
             c = cand_by[s["ticker"]]
             for fld in ("dcf_upside", "ev_ebitda", "pe", "ps", "current_price",
                         "market_cap", "revenue", "company",
-                        "target_mean", "target_upside", "recommendation"):
+                        "target_mean", "target_upside", "recommendation",
+                        "insider_signal", "insider_net_usd"):
                 s.setdefault(fld, c.get(fld))
             sig = c.get("catalyst_signals")
             s.setdefault("catalysts", sum(sig.values()) if isinstance(sig, dict) else 0)

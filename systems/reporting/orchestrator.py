@@ -32,7 +32,7 @@ os.environ.setdefault("IM_ROUTER_LOG", os.path.join(DATA_DIR, "router_decisions.
 os.environ.setdefault("IM_ROUTER_POLICY", os.path.join(HERE, "router-policy.yaml"))
 for _p in ("data-fetch", "router", "web-search"):
     sys.path.insert(0, os.path.join(LIB, "_shared", _p))
-from imdata import skillkit, estimates, segments, macro   # noqa: E402
+from imdata import skillkit, estimates, segments, macro, ownership   # noqa: E402
 from imrouter import orchestration as orch          # noqa: E402
 
 
@@ -77,6 +77,8 @@ def build_memo(ticker):
         "segments": {k: v for k, v in segments.segments(t).items()
                      if k in ("business", "geographic") and v},
         "macro": macro.snapshot(),
+        # Top institutional (13F) holders — who owns it, concentration of the register.
+        "institutional_holders": ownership.institutional_holders(t),
     }
     # Coherence ANCHOR (prevention): state the directional signal the numbers imply,
     # so the memo's recommendation can't drift into contradicting its own DCF.
@@ -133,6 +135,9 @@ def build_memo(ticker):
         {"figure": "DCF / fundamentals / margins", "source": "SEC EDGAR companyfacts (XBRL)", "as_of": "latest annual"},
         {"figure": "Comparable multiples", "source": "SEC EDGAR + market prices", "as_of": today},
         {"figure": "Moat / competitive read", "source": "moat-analyzer (10-K + computed margins)", "as_of": "latest 10-K"},
+        {"figure": "Segment mix", "source": "SEC 10-K inline XBRL (segment axes)", "as_of": "latest 10-K"},
+        {"figure": "Institutional (13F) holders", "source": "13F aggregation (via yfinance)", "as_of": "latest 13F"},
+        {"figure": "Macro backdrop (rates / CPI / ECB)", "source": "US Treasury · BLS · ECB", "as_of": today},
     ]
     commentary = [
         {"skill": "dcf-valuation", "note": f"Intrinsic {money(inputs.get('dcf_intrinsic_per_share'))}/sh ({pf(inputs.get('dcf_upside'))} vs price)."},
