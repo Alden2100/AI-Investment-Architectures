@@ -144,6 +144,7 @@ def main(args):
             or args.min_mcap or args.max_mcap):
         raise ValueError("Provide a mandate: --ticker-in and/or --name-contains / "
                          "--sic-contains / --min-mcap / --max-mcap.")
+    orch.reset_routing_log()   # so model_routing reflects only this run
     cands, screen_meta = screen(args)
     setup_hint = screen_meta.get("setup_hint")
     if not cands:
@@ -326,6 +327,7 @@ def main(args):
         "data_flags": data_flags,
         "setup_hint": setup_hint,
         "snapshot_coverage": screen_meta.get("snapshot_coverage"),
+        "model_routing": orch.routing_ledger(),   # which rung ran each task (qwen/sonnet/opus)
         **orch.model_meta(ranked),
         "report": report,
         "summary": summary,

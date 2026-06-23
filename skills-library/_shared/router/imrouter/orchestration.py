@@ -171,6 +171,63 @@ def coherence(numeric: str, rec_text: str) -> str:
     return ""
 
 
+def reset_routing_log() -> None:
+    """Truncate the per-run router log so routing_ledger() reflects THIS run only.
+    Call once at the top of an orchestrator's main()."""
+    p = os.environ.get("IM_ROUTER_LOG")
+    if p:
+        try:
+            open(p, "w").close()
+        except OSError:
+            pass
+    try:
+        from imrouter import engine
+        engine.reset_ledger()
+    except Exception:
+        pass
+
+
+def routing_ledger() -> list:
+    """Which rung ran each task this run — read from IM_ROUTER_LOG so it captures the
+    child skills' routing (they run as subprocesses but share the log), not just the
+    orchestrator's own calls. Returns [{task, rung, model, result, n}].
+
+    This is the proof the qwen → sonnet → opus ladder actually engaged: a run that
+    shows a single model for everything (or all 'needs_model') means the pipeline
+    judgment happened OUTSIDE the router — the failure mode where a driving agent does
+    the ranking itself instead of letting the orchestrator route it."""
+    from collections import OrderedDict
+    entries = []
+    p = os.environ.get("IM_ROUTER_LOG")
+    if p and os.path.exists(p):
+        try:
+            for ln in open(p):
+                ln = ln.strip()
+                if ln:
+                    try:
+                        entries.append(json.loads(ln))
+                    except ValueError:
+                        continue
+        except OSError:
+            pass
+    if not entries:
+        try:
+            from imrouter import engine
+            entries = engine.ledger()
+        except Exception:
+            entries = []
+    agg = OrderedDict()
+    for d in entries:
+        task = d.get("task")
+        rung = d.get("chosen_rung") or d.get("rung")
+        key = (task, rung, d.get("result"), d.get("reason"))
+        if key not in agg:
+            agg[key] = {"task": task, "rung": rung, "model": d.get("model"),
+                        "result": d.get("result"), "reason": d.get("reason"), "n": 0}
+        agg[key]["n"] += 1
+    return list(agg.values())
+
+
 def model_meta(res: dict) -> dict:
     """Provenance for the narrative model step, so a qwen/degraded run is never
     mistaken for Claude. Spread into an orchestrator's output dict alongside the

@@ -690,6 +690,15 @@ def render(system: str, d: dict) -> str:
     elif route and route != "n/a":
         add("")
         add(f"· narrative model: {route}" + (f" ({d.get('model_id')})" if d.get("model_id") else ""))
+    # Model-routing ledger: which rung ran each task this run (proves the qwen/sonnet/
+    # opus mix engaged, or reveals a single-model collapse).
+    routing = d.get("model_routing") or []
+    if routing:
+        mix = "; ".join(f"{r.get('task')}→{r.get('rung') or '?'}"
+                        + (f"[{r.get('reason')}]" if r.get("reason") else "")
+                        for r in routing if r.get("task"))
+        if mix:
+            add(f"· model routing: {mix}")
     return "\n".join(L)
 
 

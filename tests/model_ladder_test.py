@@ -123,12 +123,38 @@ def test_live_escalation_and_log():
         os.environ.pop("IM_ROUTER_LOG", None)
 
 
+def test_routing_ledger():
+    print("\nRouting ledger (per-run, file-backed, cross-process):")
+    from imrouter import orchestration as orch
+    d = tempfile.mkdtemp()
+    cli = Path(d) / "claude"
+    cli.write_text("#!/usr/bin/env python3\n" + FAKE_BODY)
+    cli.chmod(0o755)
+    os.environ["CLAUDE_CLI"] = str(cli)
+    os.environ["IM_ROUTER_LOG"] = str(Path(d) / "r.jsonl")
+    os.environ.pop("IM_DISABLE_CLAUDE", None)
+    try:
+        orch.reset_routing_log()
+        engine.route("rank", task="synthesis", schema={"type": "object", "required": ["x"]},
+                     policy={"routes": {"synthesis": "sonnet"}})
+        led = orch.routing_ledger()
+        tasks = {e["task"] for e in led}
+        check("ledger captured the synthesis task", "synthesis" in tasks, led)
+        check("ledger names a model", any(e.get("model") for e in led), led)
+        orch.reset_routing_log()
+        check("reset clears the ledger", orch.routing_ledger() == [])
+    finally:
+        os.environ.pop("CLAUDE_CLI", None)
+        os.environ.pop("IM_ROUTER_LOG", None)
+
+
 if __name__ == "__main__":
     test_resolution_and_cost_guard()
     test_backcompat_alias()
     test_length_guard()
     test_invalid_reason()
     test_live_escalation_and_log()
+    test_routing_ledger()
     n = sum(_results)
     print(f"\n{n}/{len(_results)} model-ladder checks passed")
     sys.exit(0 if all(_results) else 1)

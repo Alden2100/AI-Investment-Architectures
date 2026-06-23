@@ -149,7 +149,24 @@ def load_policy(policy) -> dict:
     return load_policy(data or {})
 
 
+# In-process routing ledger — every dispatch appends here so an orchestrator can
+# report which rung (qwen / sonnet / opus) actually ran each task. This is what makes
+# the "some qwen, some sonnet, some opus" claim verifiable: if a run shows one model
+# for everything (or all needs_model), the ladder didn't engage.
+_LEDGER: list = []
+
+
+def ledger() -> list:
+    return list(_LEDGER)
+
+
+def reset_ledger() -> None:
+    _LEDGER.clear()
+
+
 def _log(decision: dict) -> None:
+    _LEDGER.append({k: decision.get(k) for k in
+                    ("task", "rung", "chosen_rung", "route", "model", "result", "reason")})
     line = json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        **decision})
     log_path = os.environ.get("IM_ROUTER_LOG")
