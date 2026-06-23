@@ -205,6 +205,19 @@ def data_quality(ticker: str, *, used_price=None, computed_mcap=None) -> list:
     if isinstance(used_price, (int, float)) and isinstance(hi, (int, float)) and hi > 0 \
             and used_price > hi * 1.10:
         flags.append("price above the 52-week high — possible bad tick")
+    # Independent second-source corroboration: the checks above all lean on Yahoo's
+    # own figures, so they can't catch a wholly wrong Yahoo level. Cross-check the
+    # used price against a genuinely independent feed (Stooq, or keyed Polygon/AV).
+    if isinstance(used_price, (int, float)):
+        try:
+            from . import prices
+            cc = prices.corroborate_price(ticker, used_price)
+            if cc and not cc["agree"]:
+                flags.append(f"price ${used_price:,.2f} not corroborated by independent "
+                             f"{cc['source']} feed ${cc['independent']:,.2f} "
+                             f"({cc['divergence']:+.0%}) — level uncertain")
+        except Exception:
+            pass
     return flags
 
 

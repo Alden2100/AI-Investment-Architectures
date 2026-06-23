@@ -237,10 +237,22 @@ def ecb_series(flow: str = "FM", series_key: str = "B.U2.EUR.4F.KR.MRR_FR.LEV",
 
 
 def snapshot(*, force: bool = False) -> dict:
-    """Compact macro backdrop for portfolio/reporting overlays. Best-effort."""
+    """Compact macro backdrop for portfolio/reporting overlays. Best-effort.
+
+    Treasury rates are the spine (also feed the DCF risk-free); CPI (BLS) and the
+    ECB main refinancing rate are added as inflation / global-policy context so a
+    memo or portfolio overlay can frame the rate regime, not just the curve."""
     out = {"risk_free_10y": risk_free_rate("10y", force=force),
            "risk_free_3m": risk_free_rate("3m", force=force)}
     rf10, rf3 = out["risk_free_10y"], out["risk_free_3m"]
     if isinstance(rf10, (int, float)) and isinstance(rf3, (int, float)):
         out["yield_curve_10y_3m"] = round(rf10 - rf3, 5)  # <0 = inverted
+    cpi = bls_series(force=force)                    # CPI-U all-items, YoY
+    if cpi and cpi.get("yoy_pct") is not None:
+        out["cpi_yoy_pct"] = cpi.get("yoy_pct")
+        out["cpi_period"] = cpi.get("period")
+    ecb = ecb_series(force=force)                    # ECB main refinancing rate
+    if ecb and ecb.get("value") is not None:
+        out["ecb_main_refi_pct"] = ecb.get("value")
+        out["ecb_as_of"] = ecb.get("as_of")
     return {k: v for k, v in out.items() if v is not None}

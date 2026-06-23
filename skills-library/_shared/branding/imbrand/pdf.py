@@ -271,6 +271,93 @@ def _two_col(left, right):
     return t
 
 
+# --------------------------------------------------------------------------- #
+# Shared exhibits for the new public-data signals (macro / segments / 13F /
+# insider). Each returns a flowable or list of flowables, [] / None when empty.
+# --------------------------------------------------------------------------- #
+_MACRO_STYLE = ParagraphStyle("macro", fontName=C.FONT_SANS, fontSize=9.8, leading=14,
+                              textColor=C.SLATE, spaceAfter=6)
+
+
+def _macro_line(macro, label="Macro backdrop"):
+    """One-line rate / inflation / positioning regime from a macro snapshot. Accepts
+    either a flat Treasury snapshot (reporting) or one nested as {rates, vix,
+    spx_positioning} (portfolio). Treasury rates are decimals; CPI/ECB are percents."""
+    if not isinstance(macro, dict) or not macro:
+        return None
+    rates = macro.get("rates") if isinstance(macro.get("rates"), dict) else macro
+    bits = []
+    rf10, rf3 = rates.get("risk_free_10y"), rates.get("risk_free_3m")
+    cv = rates.get("yield_curve_10y_3m")
+    if isinstance(rf10, (int, float)):
+        bits.append(f"UST 10Y {rf10 * 100:.2f}%")
+    if isinstance(rf3, (int, float)):
+        bits.append(f"3M {rf3 * 100:.2f}%")
+    if isinstance(cv, (int, float)):
+        bits.append(f"curve {cv * 10000:+.0f}bp" + (" (inverted)" if cv < 0 else ""))
+    cpi = rates.get("cpi_yoy_pct")
+    if isinstance(cpi, (int, float)):
+        per = rates.get("cpi_period")
+        bits.append(f"CPI {cpi:+.1f}% YoY" + (f" ({per})" if per else ""))
+    ecb = rates.get("ecb_main_refi_pct")
+    if isinstance(ecb, (int, float)):
+        bits.append(f"ECB refi {ecb:.2f}%")
+    vix = macro.get("vix") if isinstance(macro.get("vix"), dict) else None
+    if vix and isinstance(vix.get("level"), (int, float)):
+        bits.append(f"VIX {vix['level']:.1f} ({vix.get('regime', '')})".replace(" ()", ""))
+    pos = macro.get("spx_positioning") if isinstance(macro.get("spx_positioning"), dict) else None
+    if pos and isinstance(pos.get("noncommercial_net"), (int, float)):
+        net = int(pos["noncommercial_net"])
+        bits.append(f"S&P spec net {'long' if net >= 0 else 'short'} {abs(net):,}")
+    if not bits:
+        return None
+    return Paragraph(f"<b>{label}:</b> " + "  ·  ".join(bits), _MACRO_STYLE)
+
+
+def _segment_table(title, rows, limit=6):
+    """Revenue-by-segment exhibit: name · revenue · share of the shown segments."""
+    rows = [r for r in (rows or [])
+            if isinstance(r, dict) and isinstance(r.get("value"), (int, float))][:limit]
+    if not rows:
+        return []
+    total = sum(r["value"] for r in rows) or 1
+    body = [[cell(r.get("member", "—"), color=C.NAVY, bold=True),
+             cell(_big(r["value"]), align=TA_RIGHT),
+             cell(f"{r['value'] / total * 100:.0f}%", align=TA_RIGHT)] for r in rows]
+    return [Paragraph(title, H2),
+            data_table(["Segment", "Revenue", "% of shown"], body, [3.9, 1.5, 1.5],
+                       [TA_LEFT, TA_RIGHT, TA_RIGHT])]
+
+
+def _holders_table(inst, limit=8):
+    """Top institutional (13F) holders + total institutional ownership."""
+    holders = (inst or {}).get("top_holders") or []
+    rows = []
+    for hd in holders[:limit]:
+        sh = hd.get("shares")
+        po = hd.get("pct_out")
+        rows.append([cell(hd.get("holder", "—"), color=C.NAVY, bold=True),
+                     cell(f"{int(sh):,}" if isinstance(sh, (int, float)) else "—", align=TA_RIGHT),
+                     cell(f"{po:.2f}%" if isinstance(po, (int, float)) else "—", align=TA_RIGHT)])
+    if not rows:
+        return []
+    out = [Paragraph("Top Institutional Holders (13F)", H2),
+           data_table(["Holder", "Shares", "% Out"], rows, [4.0, 1.5, 1.4],
+                      [TA_LEFT, TA_RIGHT, TA_RIGHT])]
+    pi = (inst or {}).get("pct_institutions")
+    if isinstance(pi, (int, float)):
+        out.append(Paragraph(f"Institutions hold {pi:.1f}% of shares outstanding (13F aggregation).",
+                             CAPTION))
+    return out
+
+
+def _signed_big(v):
+    """Signed compact dollars for a net flow: +$5.0M / −$1.2M."""
+    if not isinstance(v, (int, float)):
+        return "—"
+    return ("+" if v >= 0 else "−") + _big(abs(v))
+
+
 def _valuation(d):
     dz = d.get("dossier", {})
     sc, sd = dz.get("scenarios", {}), dz.get("scenario_detail", {})
@@ -444,6 +531,23 @@ def _idea(d):
                            f"<font color='{_hexc(C.status_color(r.get('verdict','')))}'>"
                            f"[{(r.get('verdict') or '').upper()}]</font> — {_flat(r.get('thesis', ''))}",
                            SMALL))
+    # Insider activity (SEC Form 4) — net open-market smart-money signal per name.
+    ins = [r for r in rows if isinstance(r, dict) and r.get("insider_signal")
+           and r["insider_signal"] not in ("no open-market activity", "balanced/none")]
+    if ins:
+        irows = []
+        for r in ins:
+            sig = (r.get("insider_signal") or "")
+            col = C.POSITIVE if "buy" in sig else C.NEGATIVE if "sell" in sig else C.INK
+            irows.append([cell(r.get("ticker"), color=C.NAVY, bold=True),
+                          cell(sig.title(), color=col, bold=True),
+                          cell(_signed_big(r.get("insider_net_usd")), align=TA_RIGHT)])
+        f += [Paragraph("Insider Activity (Form 4)", H2),
+              data_table(["Ticker", "Net Signal", "Net Open-Mkt $"], irows,
+                         [1.6, 2.7, 2.6], [TA_LEFT, TA_LEFT, TA_RIGHT]),
+              Paragraph("Open-market buys vs sales over ~90 days (routine grants / tax "
+                        "sales excluded). Net buying supports a name; sustained selling is a "
+                        "mild caution.", CAPTION)]
     return h, f
 
 
@@ -463,6 +567,10 @@ def _portfolio(d):
             ("Avg pairwise corr", cell(co.get("avg_pairwise_correlation"))),
             ("Position limit", cell(_mg(lim.get("max_weight")) if lim.get("max_weight") else "n/a")),
             ], label_w=1.7, val_w=1.7))]
+    # Macro / volatility regime overlay (rates + CPI + ECB + VIX + S&P positioning).
+    mline = _macro_line(d.get("macro"), label="Regime")
+    if mline is not None:
+        f.append(mline)
 
     # Holdings table
     hold = d.get("holdings") or []
@@ -661,6 +769,10 @@ def _reporting(d):
             kv([("Inst. ownership", cell(_mg(own.get("pct_held_institutions")))),
                 ("Short % float", cell(_mg(sh.get("pct_of_float")))),
                 ("Float", cell(_big(own.get("float_shares"))))], label_w=1.7, val_w=1.8)))
+    # Macro backdrop line (rates + CPI + ECB) — frames the rate regime for the memo.
+    mline = _macro_line(m.get("macro"))
+    if mline is not None:
+        f.append(mline)
     if isinstance(sec, dict) and sec:
         for k, v in sec.items():
             f += [Paragraph(k.replace("_", " ").title(), H2), Paragraph(_flat(v), BODY)]
@@ -668,6 +780,11 @@ def _reporting(d):
         f.append(Paragraph(_flat(d["draft_text"]), BODY))
     else:
         f.append(Paragraph("Inputs gathered; memo draft unavailable.", BODY))
+    # Exhibits: segment mix (sum-of-parts) + the institutional (13F) register.
+    seg = m.get("segments") or {}
+    f += _segment_table("Revenue by Segment", seg.get("business"))
+    f += _segment_table("Revenue by Geography", seg.get("geographic"))
+    f += _holders_table(m.get("institutional_holders"))
     return h, f
 
 
