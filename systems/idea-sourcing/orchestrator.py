@@ -53,6 +53,7 @@ def screen(args):
     if args.sic_contains:  sargs += ["--sic-contains", args.sic_contains]
     if args.min_mcap:      sargs += ["--min-mcap", args.min_mcap]
     if args.max_mcap:      sargs += ["--max-mcap", args.max_mcap]
+    if getattr(args, "us_only", False): sargs += ["--us-only"]
     # Sector/size mandates now filter the size-aware snapshot across the whole
     # universe (imdata/screener.py), so the old "--max-fetch 160" top-down hack —
     # which only ever reached the largest names and missed every mid-cap — is gone.
@@ -322,5 +323,7 @@ if __name__ == "__main__":
     p.add_argument("--min-mcap", default=None)
     p.add_argument("--max-mcap", default=None)
     p.add_argument("--theme", default=None, help="qualitative tilt, e.g. 'growth value'")
+    p.add_argument("--us-only", dest="us_only", action="store_true",
+                   help="restrict the screen to US filers (exclude foreign issuers / ADRs)")
     p.add_argument("--max-candidates", default="6")
     skillkit.run(main, p)

@@ -301,8 +301,12 @@ def resolve_mandate(system: str, text: str) -> dict:
         form = _norm_form(m.get("form"))
         quals = _quals(text, m.get("qualitative"))
 
+    # "US-based / US-listed / American / domestic" -> restrict the screen to US filers.
+    us_only = bool(re.search(r"\b(us[-\s]?based|u\.s\.[-\s]?based|us[-\s]?only|"
+                             r"american|domestic|us[-\s]?listed)\b", text, re.I))
     return {"tickers": tickers, "positions": positions, "sector_sic": sector_sic,
-            "min_mcap": lo, "max_mcap": hi, "form": form, "quals": quals}
+            "min_mcap": lo, "max_mcap": hi, "form": form, "quals": quals,
+            "us_only": us_only}
 
 
 def build_argv(system: str, text: str) -> tuple:
@@ -358,6 +362,8 @@ def build_argv(system: str, text: str) -> tuple:
             argv += ["--max-mcap", m["max_mcap"]]
         if m["quals"]:
             argv += ["--theme", " ".join(m["quals"])[:120]]
+        if m.get("us_only"):
+            argv += ["--us-only"]
         if not argv:
             return None, ("Give a mandate: a sector (\"software\"), size "
                           "(\"large-cap\"), or some tickers.")
