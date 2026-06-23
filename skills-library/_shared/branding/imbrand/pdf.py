@@ -496,6 +496,15 @@ def _idea(d):
                                 ("LINEBEFORE", (0, 0), (0, -1), 3, C.STEEL),
                                 ("LEFTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 6),
                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
+    def _score_cell(v):
+        if not isinstance(v, (int, float)):
+            return cell("—", align=TA_RIGHT)
+        col = C.POSITIVE if v >= 60 else C.STEEL if v >= 40 else C.NEGATIVE
+        return cell(str(int(v)), color=col, bold=True, align=TA_RIGHT)
+
+    def _r40(v):
+        return cell(f"{v:.0f}" if isinstance(v, (int, float)) else "—", align=TA_RIGHT)
+
     tr = []
     for r in rows:
         tk = r.get("ticker", "?")
@@ -503,34 +512,55 @@ def _idea(d):
         tr.append([
             cell(r.get("rank", "•"), bold=True),
             cell(tk + mark, color=C.NAVY, bold=True),
+            _score_cell(r.get("composite_score")),
             cell((r.get("verdict") or "—").upper(), color=C.status_color(r.get("verdict", "")), bold=True),
             cell(_big(r.get("market_cap")), align=TA_RIGHT),
-            cell(_pct(r.get("earnings_growth")) if r.get("earnings_growth") is not None else "—", align=TA_RIGHT),
+            cell(_pct(r.get("revenue_growth")) if r.get("revenue_growth") is not None else "—", align=TA_RIGHT),
+            _r40(r.get("rule_of_40")),
             cell(_x(r.get("ev_ebitda")), align=TA_RIGHT),
-            cell(_x(r.get("pe")), align=TA_RIGHT),
             cell(_x(r.get("peg")) if r.get("peg") is not None else "—", align=TA_RIGHT),
-            cell(_pct(r.get("target_upside")) if r.get("target_upside") is not None else "—",
-                 color=_pct_color(r.get("target_upside")), align=TA_RIGHT),
         ])
     f = [banner, Spacer(1, 8), Paragraph("Screening Shortlist", H2),
-         data_table(["#", "Ticker", "Verdict", "Mkt Cap", "EPS gr.", "EV/EBITDA", "P/E", "PEG", "Street↑"], tr,
-                    [0.3, 0.95, 0.95, 1.0, 0.85, 1.05, 0.65, 0.6, 0.8],
-                    [TA_LEFT, TA_LEFT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
-         Paragraph(f"Peer medians — EV/EBITDA {_x(med.get('ev_ebitda'))} · "
-                   f"P/E {_x(med.get('pe'))} · P/S {_x(med.get('ps'))} · PEG {_x(med.get('peg'))}. "
-                   "'Verdict' is a diligence priority (pursue/watch/pass), not a buy/sell call.", CAPTION)]
+         data_table(["#", "Ticker", "Score", "Verdict", "Mkt Cap", "Rev gr.", "Rule-40", "EV/EBITDA", "PEG"], tr,
+                    [0.3, 0.9, 0.65, 0.9, 0.95, 0.75, 0.75, 1.05, 0.6],
+                    [TA_LEFT, TA_LEFT, TA_RIGHT, TA_LEFT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT, TA_RIGHT]),
+         Paragraph("'Score' is a 0–100 composite (value · growth · quality · catalyst · momentum) "
+                   "— the ranking anchor; the single-stage DCF is a rough sort only, not shown as the "
+                   "headline. 'Verdict' is a diligence priority (pursue/watch/pass), not a buy/sell call. "
+                   f"Peer medians — EV/EBITDA {_x(med.get('ev_ebitda'))} · P/E {_x(med.get('pe'))} · "
+                   f"PEG {_x(med.get('peg'))}.", CAPTION)]
     # Per-name data-quality flags
     if flags:
         f.append(Paragraph("Data-Quality Flags", H2))
         for tk, fl in flags.items():
             f.append(Paragraph(f"<b>{tk}</b> ⚠ — {'; '.join(fl)}", SMALL))
-    # Per-name theses
+    # Per-name theses, each prefixed with the composite + its sub-scores + key software
+    # fundamentals so the call is anchored on the score, not the crude DCF.
     f.append(Paragraph("Theses", H2))
     for r in rows:
-        f.append(Paragraph(f"<b>{r.get('ticker', '')}</b> "
-                           f"<font color='{_hexc(C.status_color(r.get('verdict','')))}'>"
-                           f"[{(r.get('verdict') or '').upper()}]</font> — {_flat(r.get('thesis', ''))}",
-                           SMALL))
+        sc = r.get("scores") or {}
+        sub = " · ".join(f"{k[:3]} {sc[k]}" for k in ("value", "growth", "quality", "catalyst", "momentum")
+                         if isinstance(sc.get(k), (int, float)))
+        comp = r.get("composite_score")
+        head = (f"<b>{r.get('ticker', '')}</b> "
+                f"<font color='{_hexc(C.status_color(r.get('verdict','')))}'>"
+                f"[{(r.get('verdict') or '').upper()}]</font>"
+                + (f" <b>score {int(comp)}</b>" if isinstance(comp, (int, float)) else "")
+                + (f" ({sub})" if sub else "") + f" — {_flat(r.get('thesis', ''))}")
+        f.append(Paragraph(head, SMALL))
+        fund = []
+        if r.get("revenue_growth") is not None:
+            fund.append(f"rev gr {_pct(r['revenue_growth'])}")
+        if r.get("gross_margin") is not None:
+            fund.append(f"gross {_mg(r['gross_margin'])}")
+        if r.get("operating_margin") is not None:
+            fund.append(f"op {_mg(r['operating_margin'])}")
+        if r.get("rule_of_40") is not None:
+            fund.append(f"Rule-of-40 {r['rule_of_40']:.0f}")
+        if r.get("target_upside") is not None:
+            fund.append(f"Street {_pct(r['target_upside'])} ({str(r.get('recommendation') or 'n/a').replace('_',' ')})")
+        if fund:
+            f.append(Paragraph("    " + " · ".join(fund), CAPTION))
     # Insider activity (SEC Form 4) — net open-market smart-money signal per name.
     ins = [r for r in rows if isinstance(r, dict) and r.get("insider_signal")
            and r["insider_signal"] not in ("no open-market activity", "balanced/none")]
