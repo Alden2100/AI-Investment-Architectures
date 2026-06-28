@@ -11,7 +11,9 @@ routes:
   extraction:     qwen
   screening:      qwen          # universe screening pre-filter
   summarization:  qwen          # news / headline digestion
+  debate_generate: qwen         # confirming/disconfirming evidence (confidence guard escalates hard ones)
   synthesis:      sonnet        # ranking the dossier into a shortlist (confidence guard promotes hard ones)
   reasoning:      sonnet
   drafting:       opus
   judgment:       opus
+  debate_reconcile: opus        # evidence-reconciler / ranking reconcile (high rung; the escalation tier)

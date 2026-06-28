@@ -1,22 +1,54 @@
 name: idea-sourcing
 description: >
-  Mandate -> ranked shortlist. Screens the universe, enriches each candidate with
-  fundamentals, catalysts, news, a DCF and peer multiples, then ranks into a
-  shortlist with a one-line thesis per name.
-version: 1.0.0
+  Mandate -> evidence-backed ranked opportunity list. A progressive, mandate-matching
+  funnel: parse the mandate into tagged criteria, hard-filter the universe (no silent
+  drops), factor- and text-rank survivors, score each against the mandate's own criteria,
+  then enrich + rank the top names. Evidence + ranking explanation only — no thesis.
+version: 2.0.0
 orchestrator: orchestrator.py
 router_policy: router-policy.yaml
 
 # Exactly which library pieces this system pins. `python link.py idea-sourcing`
 # materializes these as symlinks under .claude/skills and .claude/agents.
 skills:
-  - {name: universe-screener,    version: 1.0.0}
-  - {name: fundamentals-fetcher, version: 1.0.0}
-  - {name: catalyst-flagger,     version: 1.0.0}
-  - {name: news-fetcher,         version: 1.0.0}
-  - {name: dcf-valuation,        version: 1.0.0}
-  - {name: comps-builder,        version: 1.0.0}
-  - {name: web-search,           version: 1.0.0}
+  # --- Stage 0: mandate-interpreter ---
+  - {name: mandate-parser,         version: 1.0.0}
+  # --- Stage 1-2: opportunity-engine funnel (deterministic) ---
+  - {name: universe-filter,        version: 1.0.0}
+  - {name: factor-ranker,          version: 1.0.0}
+  - {name: universe-screener,      version: 1.0.0}
+  # --- Stage 3: text similarity (deterministic, numpy TF-IDF) ---
+  - {name: text-similarity,        version: 1.0.0}
+  # --- Stage 4: quantitative scorecard ---
+  - {name: mandate-scorecard,      version: 1.0.0}
+  - {name: fundamentals-fetcher,   version: 1.0.0}
+  - {name: comps-builder,          version: 1.0.0}
+  - {name: dcf-valuation,          version: 1.0.0}
+  - {name: analyst-estimate-monitor, version: 1.0.0}
+  # --- Stage 5: catalyst-detector ---
+  - {name: catalyst-flagger,       version: 1.0.0}
+  - {name: news-fetcher,           version: 1.0.0}
+  - {name: insider-trading-monitor, version: 1.0.0}
+  - {name: regulatory-filing-monitor, version: 1.0.0}
+  - {name: filing-change-detector, version: 1.0.0}
+  - {name: earnings-call-summarizer, version: 1.0.0}
+  # --- Stage 6: qualitative-researcher + debate pair ---
+  - {name: business-model-analyzer, version: 1.0.0}
+  - {name: moat-analyzer,          version: 1.0.0}
+  - {name: confirming-evidence,    version: 1.0.0}
+  - {name: disconfirming-evidence, version: 1.0.0}
+  - {name: evidence-reconciler,    version: 1.0.0}
+  # --- Stage 7: opportunity-ranker + challenger ---
+  - {name: ranking-challenger,     version: 1.0.0}
+  # --- shared ---
+  - {name: web-search,             version: 1.0.0}
 
 agents:
-  - {name: screening-analyst,    version: 1.0.0}
+  - {name: idea-sourcing-orchestrator, version: 1.0.0}
+  - {name: mandate-interpreter,    version: 1.0.0}
+  - {name: universe-validator,     version: 1.0.0}
+  - {name: quantitative-screener,  version: 1.0.0}
+  - {name: catalyst-detector,      version: 1.0.0}
+  - {name: qualitative-researcher, version: 1.0.0}
+  - {name: opportunity-ranker,     version: 1.0.0}
+  - {name: screening-analyst,      version: 1.0.0}
