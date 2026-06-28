@@ -49,12 +49,28 @@ def main():
     print(f"snapshot: {n_universe} names\n")
     assert n_universe > 0, "snapshot empty — warm it first"
 
-    # ---- Case 1: no hard constraints (only soft) -> nothing is cut ----------
+    # Instrument hygiene (Phase 5) is default-ON, so SPACs/warrants/units are removed
+    # regardless of mandate. Compute that set so the invariant checks below isolate the
+    # CONSTRAINT behavior from hygiene removals.
+    def _hygiene(t, sic):
+        t = (t or "").upper()
+        if str(sic).strip() == "6770":
+            return True
+        if any(t.endswith(s) for s in (".WS", "-WS", "/WS", ".W", "-W", ".U", "-U", ".R", "-R")):
+            return True
+        return len(t) == 5 and t.isalpha() and t[-1] in ("W", "U", "R")
+    hygiene = {t for t, m in rows.items() if _hygiene(t, m.get("sic"))}
+    print(f"(instrument-hygiene set: {len(hygiene)} names)")
+
+    # ---- Case 1: soft-only mandate cuts nothing (only hygiene may remove) ---
     print("Case 1: soft-only mandate cuts nothing")
     r = s1.run(spec([soft("c1", "preferably high margins")]))
-    check("survivors == universe", len(r["survivors"]) == n_universe,
-          f"{len(r['survivors'])} != {n_universe}")
-    check("zero rejects", len(r["rejects"]) == 0, f"{len(r['rejects'])} rejects")
+    surv_t = {s["ticker"] for s in r["survivors"]}
+    nonhy_rej = [x for x in r["rejects"] if x["removed_by"] != "instrument_hygiene"]
+    check("no soft-criterion rejects (only hygiene)", nonhy_rej == [], str(nonhy_rej[:3]))
+    check("survivors == universe minus hygiene",
+          len(surv_t) == n_universe - len(hygiene), f"{len(surv_t)} vs {n_universe - len(hygiene)}")
+    check("no SPAC/warrant/unit survived", not (surv_t & hygiene))
 
     # ---- Case 2: market-cap band -> survivors within band, rejects cite cap --
     print("Case 2: market_cap between [1e10, 5e10]")
@@ -63,8 +79,8 @@ def main():
     in_band = all(1e10 <= rows[s["ticker"]]["market_cap"] <= 5e10
                   for s in surv if rows[s["ticker"]].get("market_cap") is not None)
     check("every survivor with a known cap is in-band", in_band)
-    check("all rejects cite the cap criterion", all(x["removed_by"] == "c1" for x in r["rejects"]))
-    # no name with a known cap OUTSIDE the band survived
+    crit_rej = [x for x in r["rejects"] if x["removed_by"] != "instrument_hygiene"]
+    check("all non-hygiene rejects cite the cap criterion", all(x["removed_by"] == "c1" for x in crit_rej))
     leaked = [s["ticker"] for s in surv
               if rows[s["ticker"]].get("market_cap") is not None
               and not (1e10 <= rows[s["ticker"]]["market_cap"] <= 5e10)]
@@ -72,28 +88,26 @@ def main():
 
     # ---- Case 3: missing-metric is KEPT, never silently dropped -------------
     print("Case 3: hard country filter keeps NULL-country names (no silent drop)")
-    null_country = [t for t, m in rows.items() if m.get("country") in (None, "")]
+    null_country = [t for t, m in rows.items() if m.get("country") in (None, "") and t not in hygiene]
     r = s1.run(spec([hard("c1", "country", "in", ["US"], "US only")]))
-    surv_t = {s["ticker"] for s in surv}
     surv_t = {s["ticker"] for s in r["survivors"]}
     kept_null = [t for t in null_country if t in surv_t]
-    check("NULL-country names are kept (treated as unknown, not foreign)",
-          len(kept_null) == len(null_country),
-          f"{len(kept_null)}/{len(null_country)} kept")
-    # any dropped name must have a known, non-US country
-    drop_t = {x["ticker"] for x in r["rejects"]}
+    check("NULL-country (non-hygiene) names are kept (unknown != foreign)",
+          len(kept_null) == len(null_country), f"{len(kept_null)}/{len(null_country)} kept")
+    drop_t = {x["ticker"] for x in r["rejects"] if x["removed_by"] != "instrument_hygiene"}
     bad_drop = [t for t in drop_t if rows.get(t, {}).get("country") in (None, "", "US")]
     check("no name dropped on unknown/US country", not bad_drop, str(bad_drop[:5]))
 
-    # ---- Case 4: impossible hard constraint -> 0 survivors, graceful --------
-    print("Case 4: impossible cap (>=1e15) -> 0 survivors, all rejected, no crash")
+    # ---- Case 4: impossible hard constraint -> 0 known-cap survivors --------
+    print("Case 4: impossible cap (>=1e15) -> only null-cap (non-hygiene) survive")
     r = s1.run(spec([hard("c1", "market_cap", "gte", 1e15, "absurd")]))
-    # names with a known cap all fail; NULL-cap names are KEPT (no silent drop)
-    known_cap = [t for t, m in rows.items() if m.get("market_cap") is not None]
-    check("no known-cap survivor", all(rows[s["ticker"]].get("market_cap") is None
-                                       for s in r["survivors"]))
-    check("rejects ~ all known-cap names", len(r["rejects"]) == len(known_cap),
-          f"{len(r['rejects'])} vs {len(known_cap)}")
+    known_cap_nonhy = {t for t, m in rows.items() if m.get("market_cap") is not None and t not in hygiene}
+    surv_t = {s["ticker"] for s in r["survivors"]}
+    check("no known-cap (non-hygiene) survivor",
+          not any(rows[t].get("market_cap") is not None for t in surv_t))
+    c1_rej = {x["ticker"] for x in r["rejects"] if x["removed_by"] == "c1"}
+    check("c1 rejects == all known-cap non-hygiene names",
+          c1_rej == known_cap_nonhy, f"{len(c1_rej)} vs {len(known_cap_nonhy)}")
 
     # ---- Case 5: SIC sector filter (restaurants 5812) ----------------------
     print("Case 5: sic in [5812] (restaurants)")

@@ -174,6 +174,25 @@ def _exclusion_hit(rec, excl):
     return None
 
 
+_DERIV_SUFFIX = (".WS", "-WS", "/WS", ".W", "-W", ".U", "-U", ".R", "-R", ".RT", "-RT")
+
+
+def _non_common_equity(ticker, sic):
+    """Identify non-common-equity instruments the mandate doesn't want: blank-check
+    SPACs (SIC 6770), and warrants/units/rights via explicit suffix or the Nasdaq
+    5th-letter convention (e.g. ABLVW, AACBU). Single/short tickers like 'U' (Unity)
+    are NOT caught (the 5th-letter rule needs a 5-char alpha base). Returns a reason or None."""
+    t = (ticker or "").upper()
+    if str(sic).strip() == "6770":
+        return "blank-check/SPAC (SIC 6770)"
+    for suf in _DERIV_SUFFIX:
+        if t.endswith(suf):
+            return f"warrant/unit/right suffix {suf}"
+    if len(t) == 5 and t.isalpha() and t[-1] in ("W", "U", "R"):
+        return f"Nasdaq 5th-letter '{t[-1]}' (warrant/unit/right)"
+    return None
+
+
 def main(args):
     mandate = _load_mandate(args)
     mandate_hash = mandate.get("mandate_hash") or mandate.get("mandate_id") or ""
@@ -195,6 +214,15 @@ def main(args):
             "adv": m.get("adv"),
             "country": m.get("country"),
         }
+
+        # 0) instrument hygiene (default ON): drop non-common-equity — SPACs / warrants /
+        #    units / rights. The mandate wants operating common stock. Logged, not silent.
+        if not getattr(args, "keep_non_common", False):
+            nc = _non_common_equity(rec["ticker"], rec.get("sic"))
+            if nc:
+                rejects.append({"ticker": rec["ticker"], "removed_by": "instrument_hygiene",
+                                "constraint": "non-common-equity instrument", "value_seen": nc})
+                continue
 
         removed = False
         # 1) exclusions are hard removals
@@ -278,4 +306,6 @@ if __name__ == "__main__":
                     "to the company_metrics snapshot (deterministic, no silent drops).")
     p.add_argument("--mandate-file", default=None, help="path to a MandateSpec JSON file")
     p.add_argument("--mandate-json", default=None, help="inline MandateSpec JSON string")
+    p.add_argument("--keep-non-common", action="store_true",
+                   help="disable instrument hygiene (keep SPACs/warrants/units/rights)")
     skillkit.run(main, p)
