@@ -26,7 +26,7 @@ for _p in ("data-fetch", "router", "web-search"):
     if os.path.isdir(_cand) and _cand not in sys.path:
         sys.path.insert(0, _cand)
 
-from imdata import skillkit  # noqa: F401  (kept for run/emit/as_dicts convention)
+from imdata import skillkit, sectors  # noqa: F401  (skillkit for run/emit; sectors for industry_fit)
 
 # Soft-criterion field/word -> the snapshot factor it influences.
 FACTOR_FIELDS = {
@@ -100,6 +100,12 @@ def main(args):
     # Fallback: if the mandate names no mappable soft factor, weight all equally.
     if not factor_weight:
         factor_weight = {f: 1.0 for f in FACTORS}
+    # Phase 2: demote size. Market cap is already a HARD floor in Stage 1; for a quality
+    # mandate bigger is not better, so size is a near-floor tiebreaker, never the driver.
+    # Guarantee industry_fit carries weight so entry into the funnel tracks mandate fit.
+    factor_weight["industry_fit"] = max(factor_weight.get("industry_fit", 0.0), 1.0)
+    if "size" in factor_weight:
+        factor_weight["size"] = min(factor_weight["size"], 0.15)
     total_w = sum(factor_weight.values()) or 1.0
 
     ind_words = _industry_words(soft)
@@ -113,8 +119,8 @@ def main(args):
     def industry_fit(rec):
         if not ind_words:
             return 0.5  # neutral when the mandate names no industry preference
-        desc = (rec.get("sic_description") or "").lower()
-        return 1.0 if any(w in desc for w in ind_words) else 0.5
+        # synonym/SIC-aware match (so "fintech"/"medical devices"/etc. resolve), not raw substring
+        return 1.0 if sectors.matches_any(ind_words, rec.get("sic"), rec.get("sic_description")) else 0.5
 
     ranked = []
     for s in survivors:

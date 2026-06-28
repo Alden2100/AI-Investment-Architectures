@@ -97,25 +97,36 @@ def main(args):
     survivors = filt.get("survivors", [])
     store.put_rejects(run_id, filt.get("rejects", []))
 
-    # ---- Stage 2: factor pre-rank (deterministic, once, never cuts) ----
+    # ---- Stage 2: factor pre-rank (deterministic, once, never cuts; size demoted) ----
     fr = stage2_factor_rank.run(mandate, survivors)
     ranked = fr.get("ranked", [])
     fs_by = {r["ticker"]: r.get("factor_score") for r in ranked}
+    indfit_by = {r["ticker"]: (r.get("sub_scores") or {}).get("industry_fit", 0.5) for r in ranked}
     for r in ranked:
         store.put_score(run_id, r["ticker"], "factor", r.get("factor_score"), r.get("sub_scores"))
 
-    # ---- Gate -> top_k into the expensive stages (logged, NOT silent) ----
-    order = [r["ticker"] for r in ranked] or [s["ticker"] for s in survivors]
+    # ---- Stage 3 (cheap, PRE-gate): text-fit over ALL survivors from snapshot text
+    # (sic_description + title), no 10-K fetch — so the gate can use mandate fit, not size. ----
+    cheap_text_by = {}
+    if survivors and (mandate.get("semantic_query") or "").strip():
+        ct = stage3_text_similarity.run_cheap(mandate, survivors)
+        cheap_text_by = {r["ticker"]: (r.get("text_score") or 0.0) for r in ct.get("results", [])}
+    mcap_by = {s["ticker"]: s.get("market_cap") for s in survivors}
+
+    # ---- Gate on a QUALITY composite (text-fit + industry-fit + data-completeness),
+    # NOT size. Size is already a hard floor (Stage 1). Drops logged — NO SILENT DROPS. ----
+    def _quality(t):
+        core = 1.0 if mcap_by.get(t) is not None else 0.0
+        return 0.45 * cheap_text_by.get(t, 0.0) + 0.35 * indfit_by.get(t, 0.5) + 0.20 * core
+    order = sorted((s["ticker"] for s in survivors), key=lambda t: -_quality(t))
     keep, dropped = order[:args.top_k], order[args.top_k:]
     if dropped:
         store.put_rejects(run_id, [
-            {"ticker": t, "removed_by": "gate:stage2",
-             "constraint": f"factor pre-rank below top-{args.top_k}",
-             "value_seen": fs_by.get(t)} for t in dropped])
+            {"ticker": t, "removed_by": "gate:quality",
+             "constraint": f"quality composite below top-{args.top_k}",
+             "value_seen": round(_quality(t), 4)} for t in dropped])
 
-    # ---- Stage 3: text similarity over the kept set (deterministic, once, main thread) ----
-    # Skip when there's nothing to match against (no semantic query) or no survivors —
-    # text similarity needs a non-empty mandate query and a non-empty kept set.
+    # ---- Stage 3 (full, POST-gate): 10-K TNIC text-similarity on the small kept set ----
     ts_by = {}
     if keep and (mandate.get("semantic_query") or "").strip():
         ts = stage3_text_similarity.run(mandate, [{"ticker": t} for t in keep])

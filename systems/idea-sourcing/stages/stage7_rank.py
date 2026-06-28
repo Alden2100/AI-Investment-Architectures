@@ -38,7 +38,9 @@ def build(results, fs_by, ts_by, events_by, qual_by, mandate):
         q = qual_by.get(t) or {}
         lean = q.get("qual_lean", "balanced")
         qs = _qual_score(lean)
-        opp = round(0.45 * fit + 0.20 * fs + 0.10 * ts + 0.10 * cat_score + 0.15 * qs, 4)
+        # Phase 2: factor (size-ish) cut 0.20->0.10; text-fit raised 0.10->0.20. Quality
+        # (mandate-fit scorecard) stays dominant. Size is a floor, never a driver.
+        opp = round(0.45 * fit + 0.10 * fs + 0.20 * ts + 0.10 * cat_score + 0.15 * qs, 4)
         flags = sc.get("flags") or []
         conf = "low" if len(flags) >= 2 else ("medium" if (flags or lean == "disconfirming") else "high")
         nmet = sum(1 for cr in (sc.get("criterion_results") or []) if cr.get("verdict") == "meets")

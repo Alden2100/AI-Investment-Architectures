@@ -86,7 +86,7 @@ def main():
     r2 = _run(CACHED_SPEC, 2)
     rid = r2["run_id"]
     rej = store.rejects_for_run(rid)
-    gate = [x for x in rej if x["removed_by"] == "gate:stage2"]
+    gate = [x for x in rej if x["removed_by"] == "gate:quality"]
     check("gate drops recorded in reject_log (no silent drops)", len(gate) >= 1,
           f"{len(gate)} gate rows")
 

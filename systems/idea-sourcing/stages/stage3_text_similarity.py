@@ -40,19 +40,9 @@ def business_description(ticker: str, *, max_chars: int = 6000) -> str:
         return ""
 
 
-def run(mandate: dict, survivors: list) -> dict:
-    seeds = []
-    for t in (mandate.get("seed_tickers") or []):
-        d = business_description(t)
-        if d:
-            seeds.append({"ticker": t, "description": d})
-    surv = [{"ticker": s["ticker"], "description": business_description(s["ticker"])}
-            for s in survivors]
-    artifact = {
-        "mandate_text": mandate.get("semantic_query") or "",
-        "seed_companies": seeds,
-        "survivors": surv,
-    }
+def _call(mandate: dict, seeds: list, surv: list) -> dict:
+    artifact = {"mandate_text": mandate.get("semantic_query") or "",
+                "seed_companies": seeds, "survivors": surv}
     fd, path = tempfile.mkstemp(suffix=".json", prefix="stage3_")
     try:
         with os.fdopen(fd, "w") as fh:
@@ -63,3 +53,27 @@ def run(mandate: dict, survivors: list) -> dict:
     if out.get("error"):
         raise RuntimeError(f"text-similarity failed: {out['error']}")
     return {"results": out.get("results", [])}
+
+
+def run(mandate: dict, survivors: list) -> dict:
+    """Full pass: fetch each survivor's 10-K business text (Hoberg-Phillips TNIC). Used
+    POST-gate on the small kept set, where the per-name fetch cost is bounded."""
+    seeds = []
+    for t in (mandate.get("seed_tickers") or []):
+        d = business_description(t)
+        if d:
+            seeds.append({"ticker": t, "description": d})
+    surv = [{"ticker": s["ticker"], "description": business_description(s["ticker"])}
+            for s in survivors]
+    return _call(mandate, seeds, surv)
+
+
+def run_cheap(mandate: dict, survivors: list) -> dict:
+    """Cheap pass for the PRE-gate quality composite: score over the snapshot text
+    already on hand (sic_description + company title) — NO 10-K fetch — so it can run
+    over ALL survivors. Coarser than the full pass but free."""
+    surv = [{"ticker": s["ticker"],
+             "description": ((s.get("sic_description") or "") + " "
+                             + (s.get("company") or s.get("title") or "")).strip()}
+            for s in survivors]
+    return _call(mandate, [], surv)
