@@ -42,9 +42,22 @@ def build(results, fs_by, ts_by, events_by, qual_by, mandate):
         # (mandate-fit scorecard) stays dominant. Size is a floor, never a driver.
         opp = round(0.45 * fit + 0.10 * fs + 0.20 * ts + 0.10 * cat_score + 0.15 * qs, 4)
         flags = sc.get("flags") or []
-        conf = "low" if len(flags) >= 2 else ("medium" if (flags or lean == "disconfirming") else "high")
-        nmet = sum(1 for cr in (sc.get("criterion_results") or []) if cr.get("verdict") == "meets")
-        ntot = len(sc.get("criterion_results") or [])
+        crs = sc.get("criterion_results") or []
+        ntot = len(crs)
+        nmet = sum(1 for cr in crs if cr.get("verdict") == "meets")
+        # Phase 3: confidence from DATA COMPLETENESS, not flag count (the old logic was
+        # inverted — a name with no data/no flags scored "high"). Coverage = criteria
+        # actually evaluated / total; evidence present = a qualitative debate ran. No
+        # evidence or thin coverage => low; data-quality flags cap it at medium.
+        evaluated = sum(1 for cr in crs if cr.get("verdict") in ("meets", "partial", "does_not_meet"))
+        coverage = (evaluated / ntot) if ntot else 0.0
+        has_evidence = bool(q.get("evidence")) or evaluated > 0
+        if not has_evidence or coverage < 0.34:
+            conf = "low"
+        elif coverage < 0.67 or flags:
+            conf = "medium"
+        else:
+            conf = "high"
         cats = [f"{e.get('type')}" + (f" {e.get('date')}" if e.get("date") else "")
                 for e in hard_cats][:3]
         risks = [e.get("claim") for e in (q.get("evidence") or [])

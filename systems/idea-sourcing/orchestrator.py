@@ -94,8 +94,19 @@ def main(args):
 
     # ---- Stage 1: hard-constraint filter (deterministic, once) + reject log ----
     filt = stage1_universe_filter.run(mandate)
-    survivors = filt.get("survivors", [])
+    all_survivors = filt.get("survivors", [])
     store.put_rejects(run_id, filt.get("rejects", []))
+
+    # ---- needs_data quarantine: names kept by no-silent-drop but missing a CORE metric
+    # (null market cap) can't be scored — route them to a separate bucket so they never
+    # enter the gate or the ranked output (vs. landing as fit=0.00 rows). Logged, not silent. ----
+    survivors = [s for s in all_survivors if s.get("market_cap") is not None]
+    needs_data = [s["ticker"] for s in all_survivors if s.get("market_cap") is None]
+    if needs_data:
+        store.put_rejects(run_id, [
+            {"ticker": t, "removed_by": "needs_data",
+             "constraint": "core metric (market_cap) missing — not scorable",
+             "value_seen": None} for t in needs_data])
 
     # ---- Stage 2: factor pre-rank (deterministic, once, never cuts; size demoted) ----
     fr = stage2_factor_rank.run(mandate, survivors)
@@ -253,6 +264,7 @@ def main(args):
                     "exclusions": mandate.get("exclusions", [])},
         "coverage": filt.get("coverage"),
         "warming": warming,
+        "needs_data": needs_data,
         "n_survivors": len(survivors),
         "n_rejects": len(filt.get("rejects", [])) + len(dropped),
         "ranked": ranked_rows,
