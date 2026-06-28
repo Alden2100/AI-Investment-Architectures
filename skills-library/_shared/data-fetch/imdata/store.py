@@ -125,6 +125,69 @@ CREATE TABLE IF NOT EXISTS company_metrics (
     snapshot_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_mcap ON company_metrics(market_cap);
+
+-- Idea-sourcing v2 Evidence Store -------------------------------------------
+-- One row per orchestrator run. mandate_hash is the cache handle; the routing
+-- ledger is snapshotted at finish so a run's model mix is replayable.
+CREATE TABLE IF NOT EXISTS runs (
+    run_id             TEXT PRIMARY KEY,    -- uuid4 hex
+    mandate_hash       TEXT,                -- sha256 of the normalized mandate spec
+    mandate_json       TEXT,                -- full MandateSpec as JSON
+    started_at         TEXT,
+    finished_at        TEXT,
+    model_routing_json TEXT                 -- routing_ledger() snapshot at finish
+);
+CREATE INDEX IF NOT EXISTS idx_runs_mandate ON runs(mandate_hash);
+
+-- Every agent/stage writes its structured output here. The (company, stage,
+-- skill, inputs_hash) tuple is the incremental-rerun cache key: unchanged inputs
+-- => reuse a prior run's evidence, never recompute.
+CREATE TABLE IF NOT EXISTS evidence (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      TEXT,
+    company     TEXT,                       -- ticker (upper)
+    stage       INTEGER,                    -- 3..7
+    skill       TEXT,                       -- producing skill / agent name
+    json        TEXT,                       -- the stage's structured output
+    citations   TEXT,                       -- JSON array [{source,url,accession,quote}]
+    inputs_hash TEXT,                       -- cache key component
+    computed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_cache ON evidence(company, stage, skill, inputs_hash);
+CREATE INDEX IF NOT EXISTS idx_evidence_run   ON evidence(run_id, company);
+
+CREATE TABLE IF NOT EXISTS scores (
+    run_id  TEXT,
+    company TEXT,
+    factor  TEXT,                           -- value|growth|quality|text_sim|catalyst|qual|scorecard|opportunity
+    value   REAL,
+    detail  TEXT,                           -- optional JSON (sub-components)
+    PRIMARY KEY (run_id, company, factor)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT,
+    company    TEXT,
+    type       TEXT,                        -- earnings|8-K|guidance|insider|...
+    date       TEXT,
+    source     TEXT,
+    confidence REAL,
+    detail     TEXT                         -- JSON {hard_event, rationale, url}
+);
+CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, company);
+
+-- NO SILENT DROPS: every name removed by a hard filter or a funnel gate is kept
+-- here with the criterion/gate that removed it and the value that failed.
+CREATE TABLE IF NOT EXISTS reject_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT,
+    ticker          TEXT,
+    removed_by      TEXT,                   -- criterion id or "gate:stageN"
+    constraint_text TEXT,                   -- verbatim constraint (avoid reserved word `constraint`)
+    value_seen      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reject_run ON reject_log(run_id);
 """
 
 _conn: Optional[sqlite3.Connection] = None
@@ -149,11 +212,20 @@ def get_conn() -> sqlite3.Connection:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations (CREATE TABLE IF NOT EXISTS won't add columns to a
-    pre-existing table). Safe to run on every open."""
-    have = {r["name"] for r in conn.execute("PRAGMA table_info(company_metrics)")}
-    for col, decl in (("country", "TEXT"), ("note", "TEXT"), ("source", "TEXT")):
-        if col not in have:
-            conn.execute(f"ALTER TABLE company_metrics ADD COLUMN {col} {decl}")
+    pre-existing table). Safe to run on every open. New *tables* come from _SCHEMA;
+    this only patches columns onto tables that may predate them."""
+    _add_cols = {
+        "company_metrics": (("country", "TEXT"), ("note", "TEXT"), ("source", "TEXT")),
+        "evidence":        (("inputs_hash", "TEXT"),),
+        "runs":            (("model_routing_json", "TEXT"),),
+    }
+    for table, cols in _add_cols.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if not have:
+            continue  # table doesn't exist yet (fresh DB) — _SCHEMA already made it complete
+        for col, decl in cols:
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
 @contextmanager
@@ -570,4 +642,162 @@ def append_audit(actor: str, action: str, target: str, detail: str) -> int:
 def list_audit(limit: int = 50) -> list[sqlite3.Row]:
     return get_conn().execute(
         "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (int(limit),)
+    ).fetchall()
+
+
+# --------------------------------------------------------------------------- #
+# Evidence Store (idea-sourcing v2)
+# --------------------------------------------------------------------------- #
+def _as_json(obj: Any) -> str:
+    """Serialize a value to a JSON string, tolerating non-JSON types."""
+    return obj if isinstance(obj, str) else json.dumps(obj, default=str)
+
+
+# ---- runs ----------------------------------------------------------------- #
+def start_run(run_id: str, mandate_hash: str, mandate_json: Any) -> None:
+    with _tx() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO runs (run_id, mandate_hash, mandate_json, started_at, "
+            "finished_at, model_routing_json) VALUES (?, ?, ?, ?, NULL, NULL)",
+            (run_id, mandate_hash, _as_json(mandate_json), _now_iso()),
+        )
+
+
+def finish_run(run_id: str, model_routing_json: Any) -> None:
+    with _tx() as c:
+        c.execute(
+            "UPDATE runs SET finished_at = ?, model_routing_json = ? WHERE run_id = ?",
+            (_now_iso(), _as_json(model_routing_json), run_id),
+        )
+
+
+def get_run(run_id: str) -> Optional[sqlite3.Row]:
+    return get_conn().execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+
+
+def latest_run_for_mandate(mandate_hash: str) -> Optional[sqlite3.Row]:
+    return get_conn().execute(
+        "SELECT * FROM runs WHERE mandate_hash = ? ORDER BY started_at DESC LIMIT 1",
+        (mandate_hash,),
+    ).fetchone()
+
+
+# ---- evidence (the incremental-cache core) -------------------------------- #
+def put_evidence(run_id: str, company: str, stage: int, skill: str,
+                 json_obj: Any, citations: Any = None, inputs_hash: str = "") -> int:
+    with _tx() as c:
+        cur = c.execute(
+            "INSERT INTO evidence (run_id, company, stage, skill, json, citations, "
+            "inputs_hash, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, (company or "").upper(), int(stage), skill, _as_json(json_obj),
+             _as_json(citations or []), inputs_hash, _now_iso()),
+        )
+        return cur.lastrowid
+
+
+def get_cached_evidence(company: str, stage: int, skill: str,
+                        inputs_hash: str) -> Optional[dict]:
+    """Latest evidence row for an exact (company, stage, skill, inputs_hash) match,
+    across ANY run — this is what makes a re-run with unchanged inputs a cache hit.
+    Returns the parsed payload dict (with `_cached`/`_computed_at`), or None."""
+    if not inputs_hash:
+        return None
+    row = get_conn().execute(
+        "SELECT json, citations, computed_at FROM evidence WHERE company = ? AND stage = ? "
+        "AND skill = ? AND inputs_hash = ? ORDER BY id DESC LIMIT 1",
+        ((company or "").upper(), int(stage), skill, inputs_hash),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row["json"])
+    except (ValueError, TypeError):
+        return None
+    if isinstance(payload, dict):
+        payload.setdefault("_cached", True)
+        payload.setdefault("_computed_at", row["computed_at"])
+    return payload
+
+
+def evidence_for_run(run_id: str, company: Optional[str] = None) -> list[sqlite3.Row]:
+    if company:
+        return get_conn().execute(
+            "SELECT * FROM evidence WHERE run_id = ? AND company = ? ORDER BY stage, id",
+            (run_id, company.upper()),
+        ).fetchall()
+    return get_conn().execute(
+        "SELECT * FROM evidence WHERE run_id = ? ORDER BY company, stage, id", (run_id,)
+    ).fetchall()
+
+
+# ---- scores --------------------------------------------------------------- #
+def put_score(run_id: str, company: str, factor: str, value: Optional[float],
+              detail: Any = None) -> None:
+    with _tx() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO scores (run_id, company, factor, value, detail) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (run_id, (company or "").upper(), factor,
+             None if value is None else float(value),
+             None if detail is None else _as_json(detail)),
+        )
+
+
+def scores_for_run(run_id: str) -> list[sqlite3.Row]:
+    return get_conn().execute(
+        "SELECT * FROM scores WHERE run_id = ? ORDER BY company, factor", (run_id,)
+    ).fetchall()
+
+
+# ---- events --------------------------------------------------------------- #
+def put_events(run_id: str, company: str, events: Iterable[dict]) -> None:
+    rows = [
+        (run_id, (company or "").upper(), e.get("type"), e.get("date"), e.get("source"),
+         (float(e["confidence"]) if isinstance(e.get("confidence"), (int, float)) else None),
+         _as_json({k: v for k, v in e.items()
+                   if k not in ("type", "date", "source", "confidence")}))
+        for e in events if isinstance(e, dict)
+    ]
+    if not rows:
+        return
+    with _tx() as c:
+        c.executemany(
+            "INSERT INTO events (run_id, company, type, date, source, confidence, detail) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", rows,
+        )
+
+
+def events_for_run(run_id: str, company: Optional[str] = None) -> list[sqlite3.Row]:
+    if company:
+        return get_conn().execute(
+            "SELECT * FROM events WHERE run_id = ? AND company = ? ORDER BY date DESC",
+            (run_id, company.upper()),
+        ).fetchall()
+    return get_conn().execute(
+        "SELECT * FROM events WHERE run_id = ? ORDER BY company, date DESC", (run_id,)
+    ).fetchall()
+
+
+# ---- reject log (NO SILENT DROPS) ----------------------------------------- #
+def put_rejects(run_id: str, rows: Iterable[dict]) -> None:
+    """Each row: {ticker, removed_by, constraint, value_seen}. `constraint` maps to
+    the constraint_text column (the SQL word `constraint` is reserved)."""
+    payload = [
+        (run_id, (r.get("ticker") or "").upper(), r.get("removed_by"),
+         r.get("constraint") if r.get("constraint") is not None else r.get("constraint_text"),
+         None if r.get("value_seen") is None else str(r.get("value_seen")))
+        for r in rows if isinstance(r, dict)
+    ]
+    if not payload:
+        return
+    with _tx() as c:
+        c.executemany(
+            "INSERT INTO reject_log (run_id, ticker, removed_by, constraint_text, value_seen) "
+            "VALUES (?, ?, ?, ?, ?)", payload,
+        )
+
+
+def rejects_for_run(run_id: str) -> list[sqlite3.Row]:
+    return get_conn().execute(
+        "SELECT * FROM reject_log WHERE run_id = ? ORDER BY id", (run_id,)
     ).fetchall()

@@ -1,0 +1,345 @@
+"""universe-filter: Stage 1 of the opportunity drawer. Deterministic, no model calls.
+
+Applies ONLY hard_constraint criteria from a MandateSpec against the
+company_metrics snapshot, plus mandate exclusions. Emits survivors + a verbatim
+reject log. NO SILENT DROPS: a name is removed only when a hard constraint
+DEFINITIVELY fails; a missing/NULL metric is never grounds for removal.
+"""
+import argparse
+import json
+import os
+import sys
+
+# --- locate the shared library (_shared/) whether run from its canonical path,
+# --- a system's symlinked .claude/skills, or a standalone bundle -------------
+_here = os.path.realpath(__file__)
+_root = os.environ.get("IM_LIB_ROOT", "")
+if not _root:
+    _d = os.path.dirname(_here)
+    while _d != os.path.dirname(_d):
+        if os.path.isdir(os.path.join(_d, "_shared", "data-fetch")):
+            _root = _d
+            break
+        _d = os.path.dirname(_d)
+for _p in ("data-fetch", "router", "web-search"):
+    _cand = os.path.join(_root, "_shared", _p)
+    if os.path.isdir(_cand) and _cand not in sys.path:
+        sys.path.insert(0, _cand)
+
+from imdata import skillkit, store
+
+# Mandate field name -> company_metrics column. Only these are screenable in
+# Stage 1; richer fundamentals are judged per-name in Stage 4 (mandate-scorecard).
+FIELD_TO_COL = {
+    "country": "country",
+    "market_cap": "market_cap",
+    "marketcap": "market_cap",
+    "mcap": "market_cap",
+    "sic": "sic",
+    "sic_code": "sic",
+    "sector": "sic",
+    "industry": "sic",
+    "adv": "adv",
+    "liquidity": "adv",
+}
+
+
+def _load_mandate(args):
+    if args.mandate_json:
+        return json.loads(args.mandate_json)
+    if args.mandate_file:
+        with open(args.mandate_file) as f:
+            return json.load(f)
+    raise ValueError("provide --mandate-file <path> or --mandate-json <inline json>")
+
+
+def _to_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_list(v):
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple, set)):
+        return list(v)
+    return [v]
+
+
+def _is_number(v):
+    return _to_float(v) is not None and not (isinstance(v, str) and not v.strip())
+
+
+# Sector words rarely match SIC *description* text verbatim (a mandate says
+# "restaurants"; EDGAR says "Retail-Eating Places"). Expand common sector words to
+# the description tokens and SIC-code prefixes that actually occur, mirroring
+# research/universe-screener's SECTOR_SYNONYMS. A value is a list of description
+# substrings, or a {"desc": [...], "sic": [<code prefixes>]} dict.
+SECTOR_SYNONYMS = {
+    "software": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
+    "saas": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
+    "restaurant": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813", "5814"]},
+    "restaurants": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813", "5814"]},
+    "fast food": {"desc": ["eating"], "sic": ["5812", "5810"]},
+    "quick service": {"desc": ["eating"], "sic": ["5812", "5810"]},
+    "quick service restaurants": {"desc": ["eating"], "sic": ["5812", "5810"]},
+    "qsr": {"desc": ["eating"], "sic": ["5812", "5810"]},
+    "casual dining": {"desc": ["eating"], "sic": ["5812", "5810"]},
+    "dining": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813"]},
+    "biotech": ["biological", "life sciences", "physical & biological research"],
+    "biotechnology": ["biological", "life sciences", "physical & biological research"],
+    "reit": ["real estate investment trust"],
+    "reits": ["real estate investment trust"],
+    "defense": {"desc": ["guided missile", "ordnance", "ammunition"],
+                "sic": ["348", "3760", "3761", "3795", "3812"]},
+    "defence": {"desc": ["guided missile", "ordnance", "ammunition"],
+                "sic": ["348", "3760", "3761", "3795", "3812"]},
+    "thrift": ["savings institution"],
+    "savings": ["savings institution"],
+    "auto": ["motor vehicle"],
+    "automotive": ["motor vehicle"],
+    "airline": ["air transportation"],
+    "airlines": ["air transportation"],
+    "telecom": ["telephone", "telegraph", "communications services"],
+    "oil": ["crude petroleum", "petroleum refining", "oil & gas"],
+    "gas": ["crude petroleum", "natural gas", "oil & gas"],
+    "healthcare": {"desc": ["health", "medical", "pharmaceutical", "hospital"],
+                   "sic": ["80", "2834", "2836", "3841", "3845"]},
+}
+
+
+def _word_matches(word, sic_str, desc):
+    """True if a sector WORD matches a row, expanding synonyms to description tokens
+    and SIC-code prefixes; falls back to a raw substring of the description."""
+    syn = SECTOR_SYNONYMS.get(word)
+    if isinstance(syn, dict):
+        if any(s in desc for s in syn.get("desc", [])):
+            return True
+        if any(sic_str.startswith(p) for p in syn.get("sic", [])):
+            return True
+    elif isinstance(syn, list):
+        if any(s in desc for s in syn):
+            return True
+    return bool(word) and word in desc  # raw fallback
+
+
+def _sic_token_match(value, sic, sic_desc):
+    """For sic in/not_in membership tests. A value element matches a row when it
+    equals the int SIC code, OR (when it is a word) matches via synonym expansion
+    (description tokens / SIC-code prefixes) or a raw description substring."""
+    desc = (sic_desc or "").lower()
+    sic_str = str(sic) if sic is not None else ""
+    sic_i = None
+    try:
+        sic_i = int(sic) if sic is not None else None
+    except (TypeError, ValueError):
+        sic_i = None
+    for elem in _as_list(value):
+        ev = _to_float(elem)
+        if ev is not None:
+            if sic_i is not None and int(ev) == sic_i:
+                return True
+        else:
+            if _word_matches(str(elem).lower().strip(), sic_str, desc):
+                return True
+    return False
+
+
+def _test(operator, col, metric, value):
+    """Return one of: True (passes), False (definitively fails), None (indeterminate
+    because the needed metric is missing -> caller must NOT remove)."""
+    op = (operator or "").lower().strip()
+
+    # sic membership: compare int(sic) and/or sic_description text
+    if col == "sic" and op in ("in", "not_in", "notin", "not in"):
+        # handled by caller which has both sic + sic_description; signalled here
+        return "SIC_MEMBERSHIP"
+
+    if metric is None:
+        return None  # NO SILENT DROPS: indeterminate, keep the name
+
+    if op in ("in",):
+        opts = [str(x).lower() for x in _as_list(value)]
+        return str(metric).lower() in opts
+    if op in ("not_in", "notin", "not in"):
+        opts = [str(x).lower() for x in _as_list(value)]
+        return str(metric).lower() not in opts
+
+    # numeric comparisons
+    mv = _to_float(metric)
+    if mv is None:
+        return None  # metric not numeric -> indeterminate
+    if op in ("gte", ">=", "min"):
+        thr = _to_float(value)
+        return None if thr is None else mv >= thr
+    if op in ("lte", "<=", "max"):
+        thr = _to_float(value)
+        return None if thr is None else mv <= thr
+    if op in ("gt", ">"):
+        thr = _to_float(value)
+        return None if thr is None else mv > thr
+    if op in ("lt", "<"):
+        thr = _to_float(value)
+        return None if thr is None else mv < thr
+    if op in ("between", "range"):
+        bounds = _as_list(value)
+        if len(bounds) != 2:
+            return None
+        lo, hi = _to_float(bounds[0]), _to_float(bounds[1])
+        if lo is None or hi is None:
+            return None
+        if lo > hi:
+            lo, hi = hi, lo
+        return lo <= mv <= hi
+    if op in ("eq", "==", "equals"):
+        thr = _to_float(value)
+        if thr is not None:
+            return mv == thr
+        return str(metric).lower() == str(value).lower()
+    if op in ("ne", "!=", "not_equals"):
+        thr = _to_float(value)
+        if thr is not None:
+            return mv != thr
+        return str(metric).lower() != str(value).lower()
+    # unknown operator -> can't apply, keep the name
+    return None
+
+
+def _usable_hard(c):
+    """A hard_constraint is applicable only if it has a mappable field + operator + value."""
+    if (c.get("type") or "").lower() != "hard_constraint":
+        return False
+    field = (c.get("field") or "").lower().strip()
+    if field not in FIELD_TO_COL:
+        return False
+    if not (c.get("operator") or "").strip():
+        return False
+    if c.get("value") in (None, ""):
+        return False
+    return True
+
+
+def _exclusion_hit(rec, excl):
+    """An exclusion removes a name when it matches a ticker (exact) or an industry
+    word (substring of sic_description). Returns the matched value or None."""
+    e = excl
+    if isinstance(excl, dict):
+        e = excl.get("ticker") or excl.get("industry") or excl.get("value") or excl.get("text") or ""
+    e = str(e).strip()
+    if not e:
+        return None
+    if e.upper() == str(rec.get("ticker") or "").upper():
+        return f"ticker={rec.get('ticker')}"
+    desc = (rec.get("sic_description") or "").lower()
+    if e.lower() in desc and desc:
+        return f"sic_description~'{e}'"
+    return None
+
+
+def main(args):
+    mandate = _load_mandate(args)
+    mandate_hash = mandate.get("mandate_hash") or mandate.get("mandate_id") or ""
+    criteria = mandate.get("criteria") or []
+    exclusions = mandate.get("exclusions") or []
+    hard = [c for c in criteria if _usable_hard(c)]
+
+    rows = skillkit.as_dicts(store.all_metrics())
+    survivors, rejects = [], []
+    notes = []
+
+    for m in rows:
+        rec = {
+            "ticker": m.get("ticker"),
+            "company": m.get("title") or m.get("ticker"),
+            "market_cap": m.get("market_cap"),
+            "sic": m.get("sic"),
+            "sic_description": m.get("sic_description"),
+            "adv": m.get("adv"),
+            "country": m.get("country"),
+        }
+
+        removed = False
+        # 1) exclusions are hard removals
+        for excl in exclusions:
+            hit = _exclusion_hit(rec, excl)
+            if hit:
+                rejects.append({
+                    "ticker": rec["ticker"],
+                    "removed_by": "exclusion",
+                    "constraint": json.dumps(excl) if isinstance(excl, dict) else str(excl),
+                    "value_seen": hit,
+                })
+                removed = True
+                break
+        if removed:
+            continue
+
+        # 2) hard_constraint criteria
+        for c in hard:
+            col = FIELD_TO_COL[(c.get("field") or "").lower().strip()]
+            metric = rec.get(col)
+            res = _test(c.get("operator"), col, metric, c.get("value"))
+            if res == "SIC_MEMBERSHIP":
+                op = (c.get("operator") or "").lower().strip()
+                hitp = _sic_token_match(c.get("value"), rec.get("sic"), rec.get("sic_description"))
+                if op == "in":
+                    res = hitp
+                else:  # not_in
+                    res = not hitp
+            if res is None:
+                # NO SILENT DROPS: needed metric missing/indeterminate -> keep + note
+                notes.append({
+                    "ticker": rec["ticker"],
+                    "criterion": c.get("id"),
+                    "note": (f"kept despite hard constraint '{c.get('text') or c.get('id')}' "
+                             f"because metric '{col}' is missing/indeterminate "
+                             f"(value_seen={metric!r})"),
+                })
+                continue
+            if res is False:
+                rejects.append({
+                    "ticker": rec["ticker"],
+                    "removed_by": c.get("id"),
+                    "constraint": c.get("text") or f"{c.get('field')} {c.get('operator')} {c.get('value')}",
+                    "value_seen": metric,
+                })
+                removed = True
+                break
+        if removed:
+            continue
+        survivors.append(rec)
+
+    # Largest first for a stable, intuitive ordering.
+    survivors.sort(key=lambda r: (r.get("market_cap") is None, -(r.get("market_cap") or 0)))
+
+    coverage = {
+        "snapshot_names": store.metrics_count(),
+        "universe": store.companies_count(),
+    }
+    applied = [{"id": c.get("id"), "text": c.get("text"),
+                "field": c.get("field"), "operator": c.get("operator"),
+                "value": c.get("value")} for c in hard]
+    summary = (f"{len(survivors)} survivor(s), {len(rejects)} rejected by "
+               f"{len(hard)} hard constraint(s) + {len(exclusions)} exclusion(s) "
+               f"over {coverage['snapshot_names']} snapshot names. NO SILENT DROPS: "
+               f"{len(notes)} name(s) kept on indeterminate metrics.")
+    return {
+        "mandate_hash": mandate_hash,
+        "survivors": survivors,
+        "rejects": rejects,
+        "kept_notes": notes,
+        "applied_constraints": applied,
+        "coverage": coverage,
+        "summary": summary,
+    }
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(
+        description="Stage 1 opportunity filter: apply hard_constraint mandate criteria "
+                    "to the company_metrics snapshot (deterministic, no silent drops).")
+    p.add_argument("--mandate-file", default=None, help="path to a MandateSpec JSON file")
+    p.add_argument("--mandate-json", default=None, help="inline MandateSpec JSON string")
+    skillkit.run(main, p)
