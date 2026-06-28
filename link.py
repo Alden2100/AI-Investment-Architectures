@@ -3,8 +3,9 @@
 
 The repo commits only the *recipe*: a system's manifest.yaml lists exactly which
 skills and agents (by name + semver) it uses. This script reads the manifest,
-finds each piece's one canonical copy in skills-library/, and creates a symlink
-under the system's .claude/skills (and .claude/agents). Those symlinks are the
+finds each piece's one canonical copy (skills in skills-library/, agents in the
+top-level agents-library/), and creates a symlink under the system's .claude/skills
+(and .claude/agents). Those symlinks are the
 regenerable *cake* — git-ignored, rebuilt on demand after a clone.
 
 Relative link targets are always computed with os.path.relpath — never hand-written
@@ -23,6 +24,8 @@ import sys
 
 REPO = os.path.dirname(os.path.realpath(__file__))
 LIB = os.path.join(REPO, "skills-library")
+# Agents live in their own top-level library (sibling of skills-library), not inside it.
+AGENTS_LIB = os.path.join(REPO, "agents-library")
 SYSTEMS = os.path.join(REPO, "systems")
 
 
@@ -45,16 +48,15 @@ def _frontmatter(md_path) -> dict:
 
 
 def index_library() -> tuple[dict, dict]:
-    """Map skill-name -> {dir, version} and agent-name -> {file, version}."""
+    """Map skill-name -> {dir, version} (from skills-library/) and
+    agent-name -> {file, version} (from the top-level agents-library/)."""
     skills, agents = {}, {}
     for root, _dirs, files in os.walk(LIB):
-        if "agents" in os.path.relpath(root, LIB).split(os.sep):
-            continue  # agents indexed separately
         if "SKILL.md" in files:
             fm = _frontmatter(os.path.join(root, "SKILL.md"))
             name = fm.get("name") or os.path.basename(root)
             skills[name] = {"dir": root, "version": str(fm.get("version", "0.0.0"))}
-    agents_dir = os.path.join(LIB, "agents")
+    agents_dir = AGENTS_LIB
     if os.path.isdir(agents_dir):
         for f in os.listdir(agents_dir):
             if f.endswith(".md") and f != "README.md":

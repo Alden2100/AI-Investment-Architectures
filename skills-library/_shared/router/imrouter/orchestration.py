@@ -24,7 +24,7 @@ def now_stamp() -> str:
 # Analyst persona / house standard. The judgment layer was being given one-liner
 # system prompts ("You are a valuation analyst. Decisive, brief.") with no
 # audience, no rubric — which caps quality even on a strong model. persona() loads
-# the reusable agent ROLE file (skills-library/agents/<role>.md — these were never
+# the reusable agent ROLE file (agents-library/<role>.md — these were never
 # actually loaded into any prompt before) and layers a named audience + a writing
 # rubric that targets the exact failure modes: tautological theses, number-dumps
 # with no "so what", hedging filler, invented figures.
@@ -44,22 +44,29 @@ _AGENT_CACHE: dict = {}
 
 
 def _load_agent(role: str) -> str:
-    """Return the body (frontmatter stripped) of skills-library/agents/<role>.md,
-    or '' if unavailable. Cached per process."""
+    """Return the body (frontmatter stripped) of <agents-library>/<role>.md, or '' if
+    unavailable. Agents live in the top-level agents-library/ (sibling of skills-library);
+    IM_AGENTS_ROOT overrides, and the legacy in-library path is tried last. Cached per process."""
     if role in _AGENT_CACHE:
         return _AGENT_CACHE[role]
     body = ""
-    root = os.environ.get("IM_LIB_ROOT")
-    if root:
-        path = os.path.join(root, "agents", f"{role}.md")
+    roots = []
+    if os.environ.get("IM_AGENTS_ROOT"):
+        roots.append(os.environ["IM_AGENTS_ROOT"])
+    lib = os.environ.get("IM_LIB_ROOT")
+    if lib:
+        roots.append(os.path.join(os.path.dirname(lib), "agents-library"))  # sibling (new home)
+        roots.append(os.path.join(lib, "agents"))                           # legacy in-library
+    for base in roots:
         try:
-            raw = open(path, encoding="utf-8").read()
-            raw = re.sub(r"^---\n.*?\n---\n", "", raw, count=1, flags=re.DOTALL)
-            # Drop the machine-facing Contract block — it's I/O wiring, not guidance.
-            raw = re.split(r"\n##\s+Contract\b", raw, maxsplit=1)[0]
-            body = raw.strip()
+            raw = open(os.path.join(base, f"{role}.md"), encoding="utf-8").read()
         except OSError:
-            body = ""
+            continue
+        raw = re.sub(r"^---\n.*?\n---\n", "", raw, count=1, flags=re.DOTALL)
+        # Drop the machine-facing Contract block — it's I/O wiring, not guidance.
+        raw = re.split(r"\n##\s+Contract\b", raw, maxsplit=1)[0]
+        body = raw.strip()
+        break
     _AGENT_CACHE[role] = body
     return body
 

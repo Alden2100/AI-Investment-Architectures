@@ -39,8 +39,8 @@ AI-Investment-Architectures/
 │   │   ├── data-fetch/imdata/   # SEC EDGAR · prices · news · universe · SQLite store
 │   │   ├── router/imrouter/     # the routing ENGINE (Claude + qwen clients)
 │   │   └── web-search/          # keyless DuckDuckGo search skill (Brave if keyed)
-│   ├── research/  filings/  market/  valuation/  portfolio/  reporting/   # drawers
-│   └── agents/                  # reusable agent role files (contracts only)
+│   └── research/  filings/  market/  valuation/  portfolio/  reporting/  operations/  mandate/  opportunity/   # drawers
+├── agents-library/             # reusable agent role files (contracts only) — its own top-level library
 ├── systems/                     # each subfolder is one app
 │   ├── idea-sourcing/  filing-intelligence/  portfolio-monitoring/
 │   ├── valuation/  reporting/                       # ← 5 full, runnable + tested
