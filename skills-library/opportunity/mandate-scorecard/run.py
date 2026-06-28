@@ -49,13 +49,49 @@ SCHEMA = {
                 "required": ["criterion_id", "verdict", "evidence", "confidence"],
             },
         },
-        "overall_fit": {"type": "number",
-                        "description": "0..1 weighted fit of the company to the mandate."},
         "flags": {"type": "array", "items": {"type": "string"},
                   "description": "criterion ids marked does_not_meet"},
     },
-    "required": ["criterion_results", "overall_fit", "flags"],
+    "required": ["criterion_results", "flags"],
 }
+
+# overall_fit is computed DETERMINISTICALLY in Python from the per-criterion verdicts
+# (the model only judges each criterion). meets=1, partial=0.5, does_not_meet=0.
+_VERDICT_VAL = {"meets": 1.0, "partial": 0.5, "does_not_meet": 0.0}
+
+
+def _crit_weight(c):
+    try:
+        w = float(c.get("weight"))
+        return w if w > 0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _rollup_overall_fit(results, criteria):
+    """Weight-aware roll-up over the criteria that actually express the mandate's
+    judgment — EXCLUDING hard_constraint (already enforced in Stage 1) and
+    portfolio_constraint (enforced in Stage 7). Falls back to all criteria if none qualify."""
+    meta = {c.get("id"): (c.get("type"), _crit_weight(c)) for c in criteria}
+    num = den = 0.0
+    for r in results:
+        typ, w = meta.get(r.get("criterion_id"), (None, 1.0))
+        if typ in ("hard_constraint", "portfolio_constraint"):
+            continue
+        v = _VERDICT_VAL.get(r.get("verdict"))
+        if v is None:
+            continue
+        num += w * v
+        den += w
+    if den <= 0:  # no soft/qualitative criteria — fall back to all scored verdicts
+        for r in results:
+            v = _VERDICT_VAL.get(r.get("verdict"))
+            if v is None:
+                continue
+            w = meta.get(r.get("criterion_id"), (None, 1.0))[1]
+            num += w * v
+            den += w
+    return round(num / den, 4) if den > 0 else 0.0
 
 SYSTEM = (
     "You are scoring a company against an investment mandate. For EACH criterion give a verdict "
@@ -113,6 +149,9 @@ def _load_mandate(args):
 
 def main(args):
     criteria = _load_mandate(args)
+    # portfolio_constraint criteria (max-N-per-industry, liquidity, sizing) are enforced
+    # at the portfolio level (Stage 7), not scored per company — drop them here.
+    scoring_criteria = [c for c in criteria if (c.get("type") or "") != "portfolio_constraint"]
     info = universe.resolve(args.ticker)
 
     # --- DETERMINISTIC: margins (latest + trend) -----------------------------
@@ -188,14 +227,14 @@ def main(args):
         f"{evidence_lines}\n"
         f"10-K text (excerpted around business / competition / risk factors):\n{clip}\n\n"
         "MANDATE CRITERIA to score (each has id / text / type / field / operator / value / weight):\n"
-        f"{json.dumps(criteria, default=str)}\n\n"
+        f"{json.dumps(scoring_criteria, default=str)}\n\n"
         "For EACH criterion above, produce a result with criterion_id, criterion_text (echo the "
         "criterion's text), verdict (meets / partial / does_not_meet), an evidence string that "
         "cites a provided figure or quotes the provided filing text, and confidence. Hard "
         "criteria (numeric field/operator/value) should be judged against the provided figures; "
-        "soft and qualitative criteria from the filing text and consensus. Then compute "
-        "overall_fit (0..1) as a weight-aware roll-up of the verdicts (meets=1, partial=0.5, "
-        "does_not_meet=0), and list in flags every criterion_id you marked does_not_meet."
+        "soft and qualitative criteria from the filing text and consensus. List in flags every "
+        "criterion_id you marked does_not_meet. (Do NOT compute an overall score — that is "
+        "rolled up deterministically downstream.)"
     )
 
     analysis = _route(prompt, task="reasoning", system=SYSTEM, schema=SCHEMA, max_tokens=3000)
@@ -209,7 +248,10 @@ def main(args):
         "text_score": text_score,
         "margins": margins,
     }
-    return skillkit.model_output(analysis, meta)
+    out = skillkit.model_output(analysis, meta)
+    if not out.get("_needs_model"):
+        out["overall_fit"] = _rollup_overall_fit(out.get("criterion_results") or [], scoring_criteria)
+    return out
 
 
 if __name__ == "__main__":

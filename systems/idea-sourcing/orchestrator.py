@@ -22,6 +22,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import re
 import time
 import uuid
 
@@ -48,6 +49,25 @@ def _scorecard_inputs(mandate: dict, ticker: str) -> dict:
     we track it per name; mandate+ticker is a stable v1 key over a fixed snapshot.)"""
     return {"ticker": ticker.upper(),
             "criteria": [c.get("id") for c in mandate.get("criteria", [])]}
+
+
+_WORD_NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+
+
+def _max_per_industry(mandate):
+    """Read a max-N-per-industry portfolio constraint from the mandate, else None."""
+    for c in (mandate.get("criteria") or []):
+        if (c.get("type") or "") != "portfolio_constraint":
+            continue
+        txt = (c.get("text") or "").lower()
+        if "per industry" in txt or "per sector" in txt:
+            m = re.search(r"\b(\d+)\b", txt)
+            if m:
+                return int(m.group(1))
+            for w, n in _WORD_NUM.items():
+                if re.search(r"\b" + w + r"\b", txt):
+                    return n
+    return None
 
 
 def _company_pipeline(mandate, ticker, factor_score, text_score):
@@ -238,11 +258,22 @@ def main(args):
                         {"confirming": 1.0, "balanced": 0.5, "disconfirming": 0.0}.get(q.get("qual_lean"), 0.5))
 
     # ---- Stage 7: opportunity-ranker (deterministic aggregate) + selective challenger ----
-    ranked_rows = stage7_rank.build(results, fs_by, ts_by, events_by, qual_by, mandate)
+    industry_by = {s["ticker"]: s.get("sic") for s in survivors}
+    ranked_rows = stage7_rank.build(results, fs_by, ts_by, events_by, qual_by, mandate,
+                                    industry_by=industry_by)
     for i, r in enumerate(ranked_rows, 1):
         r["rank"] = i
     ranked_rows, n_challenged = stage7_rank.challenge(ranked_rows, args.top_k)
-    for i, r in enumerate(ranked_rows, 1):  # re-rank after any challenge nudges
+    # ---- Portfolio constraint: max-N-per-industry (greedy post-rank; overflow logged) ----
+    max_per = _max_per_industry(mandate)
+    capped = []
+    if max_per:
+        ranked_rows, capped = stage7_rank.cap_per_industry(ranked_rows, max_per)
+        if capped:
+            store.put_rejects(run_id, [
+                {"ticker": r["ticker"], "removed_by": "portfolio:max_per_industry",
+                 "constraint": r.get("capped_by"), "value_seen": r.get("industry")} for r in capped])
+    for i, r in enumerate(ranked_rows, 1):  # re-rank after challenge nudges + industry cap
         r["rank"] = i
     for r in ranked_rows:
         store.put_score(run_id, r["ticker"], "opportunity", r.get("opportunity_score"))

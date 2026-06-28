@@ -27,8 +27,39 @@ def _qual_score(lean):
     return {"confirming": 0.65, "balanced": 0.5, "disconfirming": 0.4}.get(lean, 0.5)
 
 
-def build(results, fs_by, ts_by, events_by, qual_by, mandate):
+def _crit_meta(mandate):
+    """id -> (type, weight, text) for ranking reasons by importance."""
+    out = {}
+    for c in (mandate.get("criteria") or []):
+        try:
+            w = float(c.get("weight"))
+        except (TypeError, ValueError):
+            w = 1.0
+        out[c.get("id")] = (c.get("type"), (w if w and w > 0 else 1.0), c.get("text"))
+    return out
+
+
+def _top_reasons(crs, cmeta, n=3):
+    """Top reasons a name fits, ranked by criterion IMPORTANCE (weight). Only 'meets'
+    on the criteria that actually express the mandate's judgment — excludes already-
+    enforced hard constraints and portfolio constraints (no boilerplate tautologies)."""
+    cand = []
+    for cr in crs:
+        if cr.get("verdict") != "meets":
+            continue
+        typ, w, text = cmeta.get(cr.get("criterion_id"), (None, 1.0, None))
+        if typ in ("hard_constraint", "portfolio_constraint"):
+            continue
+        cand.append((w, {"criterion": text or cr.get("criterion_text"),
+                         "evidence": cr.get("evidence")}))
+    cand.sort(key=lambda x: -x[0])
+    return [c for _, c in cand[:n]]
+
+
+def build(results, fs_by, ts_by, events_by, qual_by, mandate, industry_by=None):
     """Deterministic rows with opportunity_score, confidence, sub-scores, why_ranked."""
+    cmeta = _crit_meta(mandate)
+    industry_by = industry_by or {}
     rows = []
     for t, sc in results.items():
         fit = _num(sc.get("overall_fit"))
@@ -68,6 +99,8 @@ def build(results, fs_by, ts_by, events_by, qual_by, mandate):
             "factor_score": fs, "text_score": ts, "catalyst_score": cat_score,
             "qual_lean": lean, "qual_score": qs,
             "primary_catalysts": cats, "primary_risks": risks,
+            "top_reasons": _top_reasons(crs, cmeta),
+            "industry": industry_by.get(t),
             "data_flags": flags,
             "why_ranked": (f"meets {nmet}/{ntot} mandate criteria (fit {fit:.2f}); "
                            f"factor {fs:.2f}, text-fit {ts:.2f}, catalysts {len(hard_cats)}, "
@@ -76,6 +109,34 @@ def build(results, fs_by, ts_by, events_by, qual_by, mandate):
         })
     rows.sort(key=lambda r: r["opportunity_score"], reverse=True)
     return rows
+
+
+def _industry_bucket(industry):
+    """Coarse industry key for the max-N-per-industry cap: SIC major group (first 2
+    digits) when numeric, else the lowercased description / label."""
+    s = str(industry or "").strip()
+    if s[:2].isdigit():
+        return s[:2]
+    return s.lower() or "unknown"
+
+
+def cap_per_industry(rows, max_per):
+    """Greedy post-rank pass: keep at most ``max_per`` names per industry bucket (rows
+    already sorted best-first). Returns (kept, overflow). Overflow rows carry a
+    ``capped_by`` note so the caller can log them — NO SILENT DROPS."""
+    if not max_per or max_per <= 0:
+        return rows, []
+    seen, kept, overflow = {}, [], []
+    for r in rows:
+        b = _industry_bucket(r.get("industry"))
+        if seen.get(b, 0) < max_per:
+            seen[b] = seen.get(b, 0) + 1
+            kept.append(r)
+        else:
+            r = dict(r)
+            r["capped_by"] = f"max {max_per} per industry ({b})"
+            overflow.append(r)
+    return kept, overflow
 
 
 def _is_contested(row, cutoff):

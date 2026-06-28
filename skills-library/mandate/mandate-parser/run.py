@@ -39,7 +39,7 @@ SCHEMA = {
                 "properties": {
                     "id": {"type": "string", "description": "Stable id like c1, c2 (optional; will be normalized)"},
                     "text": {"type": "string", "description": "Verbatim mandate phrase this criterion came from"},
-                    "type": {"type": "string", "enum": ["hard_constraint", "soft_preference", "qualitative"]},
+                    "type": {"type": "string", "enum": ["hard_constraint", "soft_preference", "qualitative", "portfolio_constraint"]},
                     "field": {"type": ["string", "null"],
                               "description": "Machine field for hard_constraint (e.g. country, market_cap, sector); null otherwise"},
                     "operator": {"type": ["string", "null"], "enum": ["in", "not_in", "gte", "lte", "between", None]},
@@ -72,7 +72,11 @@ SYSTEM = (
     "  - soft_preference: a numeric or directional PREFERENCE, not a hard cutoff "
     "    (e.g. 'prefer higher gross margins', 'reasonable valuation', 'lower leverage').\n"
     "  - qualitative: a judgment about moat, management quality, business-model fit, durability, "
-    "    or other non-numeric character.\n\n"
+    "    or other non-numeric character.\n"
+    "  - portfolio_constraint: a PORTFOLIO-CONSTRUCTION rule about the final set, not a per-company "
+    "    test. Examples: 'maximum of two companies per industry', 'position size <= 5%', 'no more "
+    "    than 20 names', 'adequate daily liquidity for institutional size'. These are enforced when "
+    "    assembling the ranked list, NOT scored against any single company.\n\n"
     "CRITICAL RULE: directional / hedging language is NEVER a hard_constraint. If the phrase "
     "contains 'preferably', 'ideally', 'strong', 'high-quality', 'lean toward', 'where possible', "
     "'attractive', or similar, it is a soft_preference or qualitative — never hard_constraint, "
