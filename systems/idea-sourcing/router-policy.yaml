@@ -11,7 +11,11 @@ routes:
   extraction:     qwen
   screening:      qwen          # universe screening pre-filter
   summarization:  qwen          # news / headline digestion
-  debate_generate: qwen         # confirming/disconfirming evidence (confidence guard escalates hard ones)
+  debate_generate: sonnet       # SPEED PROFILE: was qwen, but it escalated >50% of the time
+                                # (qwen x20 -> sonnet x16), paying for + serializing a wasted local
+                                # pass. Base it at sonnet to halve calls. Revert to qwen for the
+                                # token-thrifty profile. Ladder preserved: qwen still owns the routes
+                                # below; opus still owns judgment/drafting/debate_reconcile.
   synthesis:      sonnet        # ranking the dossier into a shortlist (confidence guard promotes hard ones)
   reasoning:      sonnet
   drafting:       opus

@@ -36,6 +36,15 @@ screening / classification / summarization → **qwen3.5:9b** (local, free); the
 ranking **synthesis** → **Claude** (falls back to qwen when no API key, so it runs
 keyless).
 
+### Speed profile (reversible)
+The current profile favors wall-clock while keeping all three models in use
+(qwen + Sonnet + Opus): `debate_generate` is based at **sonnet** (it escalated
+>50% of the time on qwen, so basing it higher halves the calls), `QWEN_MAX_TOKENS`
+defaults to **32000** (fewer length-guard escalations), and per-company fan-out runs
+**`IM_MAX_WORKERS=8`**. To revert to the token-thrifty profile: set
+`debate_generate: qwen` in `router-policy.yaml`, `QWEN_MAX_TOKENS=24000`, and
+`IM_MAX_WORKERS=6` (see `.env.example`).
+
 ## Manifest
 7 skills (universe-screener, fundamentals-fetcher, catalyst-flagger, news-fetcher,
 dcf-valuation, comps-builder, web-search) + agent `screening-analyst`. See

@@ -124,7 +124,7 @@ def main(args):
 
     pending_writes = []
     if to_compute:
-        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "6")))
+        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "8")))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(_company_pipeline, mandate, t, fs_by.get(t), ts_by.get(t)): (t, ih)
                     for t, ih in to_compute}
@@ -158,7 +158,7 @@ def main(args):
             to_compute5.append((t, ih5))
     fresh5 = []
     if to_compute5:
-        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "6")))
+        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "8")))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(stage5_catalyst.run, t, lookback=CATALYST_LOOKBACK): (t, ih5)
                     for t, ih5 in to_compute5}
@@ -187,7 +187,7 @@ def main(args):
             to_compute6.append((t, ih6))
     fresh6 = []
     if to_compute6:
-        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "6")))
+        max_workers = max(1, int(os.environ.get("IM_MAX_WORKERS", "8")))
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = {ex.submit(stage6_qualitative.run, mandate, t): (t, ih6)
                     for t, ih6 in to_compute6}

@@ -59,7 +59,9 @@ PAID_RUNGS = frozenset({"sonnet", "opus"})
 # Length-guard thresholds (estimated input tokens ≈ chars/4). A nominally cheap
 # step over the small model's useful window (a full 10-K / long transcript) gets
 # promoted before the call.
-QWEN_MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "24000"))
+QWEN_MAX_TOKENS = int(os.environ.get("QWEN_MAX_TOKENS", "32000"))  # speed profile: was 24000. A
+# larger cheap-rung window means fewer prompts trip the length guard or return low-confidence and
+# re-run on a higher rung. Set QWEN_MAX_TOKENS=24000 to restore the token-thrifty profile.
 SONNET_MAX_TOKENS = int(os.environ.get("SONNET_MAX_TOKENS", "150000"))
 
 DEFAULT_POLICY = {

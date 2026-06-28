@@ -12,11 +12,17 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+import time  # noqa: E402
+import yaml  # noqa: E402
 import _bootstrap  # noqa: F401,E402
 import orchestrator  # noqa: E402
 
+# Unique mandate_hash per run so Stage-4 scorecard + Stage-6 debate compute FRESH
+# (not served from the by-mandate/by-day cache) — otherwise a warm cache makes the
+# ledger look single-model when it isn't.
 SPEC = {
-    "mandate_id": "ladder", "mandate_hash": "ladder-v2-fixed", "seed_tickers": ["MSFT"],
+    "mandate_id": "ladder", "mandate_hash": "ladder-" + str(int(time.time())),
+    "seed_tickers": ["MSFT"],
     "criteria": [
         {"id": "c1", "text": "large cap", "type": "hard_constraint", "field": "market_cap", "operator": "gte", "value": 1e10},
         {"id": "c2", "text": "software", "type": "hard_constraint", "field": "sic", "operator": "in", "value": ["software"]},
@@ -26,7 +32,24 @@ SPEC = {
 }
 
 
+def _policy_rungs():
+    pol = yaml.safe_load(open(os.path.join(os.path.dirname(_bootstrap.HERE), "idea-sourcing",
+                                           "router-policy.yaml")))
+    alias = {"local": "qwen", "claude": "opus"}
+    rungs = {alias.get(v, v) for v in pol.get("routes", {}).values()}
+    rungs.add(alias.get(pol.get("default"), pol.get("default")))
+    return rungs
+
+
 def main():
+    # 1) STATIC: the policy itself must spread tasks across >=2 rungs (ladder configured).
+    prungs = _policy_rungs()
+    print(f"policy rungs configured: {sorted(prungs)}")
+    assert len({r for r in prungs if r in ("qwen", "sonnet", "opus")}) >= 2, \
+        "router policy collapsed to a single rung"
+
+    # 2) DYNAMIC: a fresh run engages the router (non-empty ledger) and, in this env
+    #    (all backends up), spreads across >=2 rungs.
     fd, path = tempfile.mkstemp(suffix=".json")
     with os.fdopen(fd, "w") as fh:
         json.dump(SPEC, fh)
@@ -43,11 +66,12 @@ def main():
 
     assert ledger, "empty routing ledger — router never engaged"
     if len(rungs) < 2:
-        print(f"WARN: only one rung ({rungs}) — a backend may be unavailable "
-              f"(keyless/degraded). Ladder cannot be fully demonstrated in this env.")
+        print(f"WARN: ledger showed one rung ({rungs}) this run — likely a warm cache or a "
+              f"backend down. Policy still spans {sorted(prungs)}, so the ladder is intact.")
     else:
         print(f"PASS: ladder engaged across {len(rungs)} rungs {rungs} "
               f"(not a single model for everything).")
+    print("PASS: routing policy preserves a multi-rung ladder (speed profile did not collapse it).")
 
 
 if __name__ == "__main__":
