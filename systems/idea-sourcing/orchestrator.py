@@ -286,6 +286,24 @@ def main(args):
     except Exception:
         pass
 
+    # ---- Audit trail (P12): everything is traceable from the Evidence Store for this run ----
+    from collections import Counter
+    rej_rows = store.rejects_for_run(run_id)
+    ev_rows = store.evidence_for_run(run_id)
+    audit = {
+        "run_id": run_id,
+        "stages_run": ["0 mandate-parser", "0b warm" if warming else "0b warm (skipped)",
+                       "1 universe-filter", "2 factor-ranker", "3 text-similarity",
+                       "4 mandate-scorecard", "5 catalyst-detector", "6 qualitative-researcher",
+                       "7 opportunity-ranker"],
+        "rejections_by_reason": dict(Counter(r["removed_by"] for r in rej_rows)),
+        "evidence_rows_by_stage": dict(Counter(e["stage"] for e in ev_rows)),
+        "score_factors_recorded": sorted({s["factor"] for s in store.scores_for_run(run_id)}),
+        "note": ("Every score traces to a skill + inputs in the Evidence Store (tables: runs, "
+                 "evidence, scores, events, reject_log) keyed by this run_id; opportunity scores "
+                 "are reproducible from each row's score_breakdown."),
+    }
+
     return {
         "system": "idea-sourcing",
         "run_id": run_id,
@@ -302,6 +320,7 @@ def main(args):
         "n_challenged": n_challenged,
         "cache_hits": [t for t in keep if t not in computed],
         "model_routing": routing,
+        "audit": audit,
         "summary": (f"{len(survivors)} survivors -> top {len(keep)} scored; "
                     f"ranked {len(ranked_rows)} by opportunity score. "
                     f"Evidence-backed shortlist for diligence triage (not investment advice)."),
