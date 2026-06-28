@@ -225,6 +225,8 @@ def _mandate_sectors(mandate: dict):
         v = c.get("value")
         return v if isinstance(v, list) else ([v] if v is not None else [])
 
+    # Categories that express a PREFERRED industry (legacy soft/qualitative map in).
+    positive_types = ("core_principle", "positive_preference", "soft_preference", "qualitative")
     preferred, avoid, countries = set(), set(), []
     for c in mandate.get("criteria", []) or []:
         typ, op = c.get("type"), (c.get("operator") or "").lower()
@@ -232,10 +234,14 @@ def _mandate_sectors(mandate: dict):
         is_sector_field = fld in ("sic", "sector", "industry")
         if fld == "country" and typ == "hard_constraint" and op == "in":
             countries += [str(v).upper() for v in vals_of(c)]
-        if typ == "hard_constraint" and op in ("not_in", "notin", "not in") and is_sector_field:
+        # AVOID: hard not_in on a sector, or any negative_constraint naming an industry
+        if (typ == "hard_constraint" and op in ("not_in", "notin", "not in") and is_sector_field) \
+                or typ == "negative_constraint":
             for v in vals_of(c):
                 avoid |= find(str(v))
-        if typ in ("soft_preference", "qualitative") or (typ == "hard_constraint" and op == "in" and is_sector_field):
+            if typ == "negative_constraint":
+                avoid |= find(txt)
+        if typ in positive_types or (typ == "hard_constraint" and op == "in" and is_sector_field):
             preferred |= find(txt)
             if is_sector_field and op == "in":
                 for v in vals_of(c):

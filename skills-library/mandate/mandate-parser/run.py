@@ -39,12 +39,14 @@ SCHEMA = {
                 "properties": {
                     "id": {"type": "string", "description": "Stable id like c1, c2 (optional; will be normalized)"},
                     "text": {"type": "string", "description": "Verbatim mandate phrase this criterion came from"},
-                    "type": {"type": "string", "enum": ["hard_constraint", "soft_preference", "qualitative", "portfolio_constraint"]},
+                    "type": {"type": "string", "enum": ["core_principle", "positive_preference",
+                                                        "hard_constraint", "negative_constraint",
+                                                        "portfolio_constraint"]},
                     "field": {"type": ["string", "null"],
                               "description": "Machine field for hard_constraint (e.g. country, market_cap, sector); null otherwise"},
                     "operator": {"type": ["string", "null"], "enum": ["in", "not_in", "gte", "lte", "between", None]},
                     "value": {"description": "Scalar / list / [low,high] for hard_constraint; null otherwise"},
-                    "weight": {"type": ["number", "null"], "description": "0..1 importance for soft/qualitative; null for hard"},
+                    "weight": {"type": ["number", "null"], "description": "0..1 importance for core_principle / positive_preference / negative_constraint; null for hard/portfolio"},
                     "rationale": {"type": "string", "description": "Why this type was chosen"},
                 },
                 "required": ["text", "type"],
@@ -65,30 +67,41 @@ SYSTEM = (
     "of criteria, CLASSIFYING each one precisely. This classification is the most important part "
     "of your job; downstream code treats hard constraints as binary filters and the rest as "
     "ranking signals, so a mis-tag changes the entire candidate set.\n\n"
-    "Classify every criterion as exactly one of:\n"
-    "  - hard_constraint: a BINARY, mandate-EXPLICIT requirement. Examples: a country/region the "
-    "    universe must be IN, an explicit market-cap floor or ceiling ('over $10B', 'small-cap "
-    "    only'), an explicit sector inclusion or exclusion ('software companies', 'no financials').\n"
-    "  - soft_preference: a numeric or directional PREFERENCE, not a hard cutoff "
-    "    (e.g. 'prefer higher gross margins', 'reasonable valuation', 'lower leverage').\n"
-    "  - qualitative: a judgment about moat, management quality, business-model fit, durability, "
-    "    or other non-numeric character.\n"
+    "Classify every criterion as exactly one of FIVE categories:\n"
+    "  - core_principle: a CENTRAL investment principle the philosophy is built on — durable "
+    "    competitive advantage / moat, high return on invested capital (ROIC), pricing power, "
+    "    capital-allocation skill, recurring/predictable revenue, reinvestment runway. These carry "
+    "    the HIGHEST weight. Give weight 0.8-1.0.\n"
+    "  - positive_preference: a desirable-but-OPTIONAL attribute that adds points if present — "
+    "    founder-led, high insider ownership, AI exposure, a preferred industry, international "
+    "    expansion. Give weight 0.3-0.6.\n"
+    "  - hard_constraint: a BINARY, mandate-EXPLICIT REQUIREMENT to be IN something — public equities, "
+    "    market cap over a floor, a country/region, a required sector, a liquidity floor. Failure "
+    "    REMOVES the company; passing earns NO points.\n"
+    "  - negative_constraint: a DISQUALIFIER / red flag to AVOID — aggressive accounting, structural "
+    "    decline, excessive leverage, customer concentration, frequent equity issuance, tobacco/"
+    "    casinos, weak governance. VIOLATING it penalizes or removes the company; merely AVOIDING it "
+    "    must NEVER earn positive points. Give weight 0.5-1.0 (severity).\n"
     "  - portfolio_constraint: a PORTFOLIO-CONSTRUCTION rule about the final set, not a per-company "
-    "    test. Examples: 'maximum of two companies per industry', 'position size <= 5%', 'no more "
-    "    than 20 names', 'adequate daily liquidity for institutional size'. These are enforced when "
-    "    assembling the ranked list, NOT scored against any single company.\n\n"
-    "CRITICAL RULE: directional / hedging language is NEVER a hard_constraint. If the phrase "
-    "contains 'preferably', 'ideally', 'strong', 'high-quality', 'lean toward', 'where possible', "
-    "'attractive', or similar, it is a soft_preference or qualitative — never hard_constraint, "
-    "even when it mentions a metric like margins or ROIC.\n\n"
-    "For hard_constraint criteria fill structured fields: field (e.g. country, market_cap, sector, "
-    "industry), operator (one of in | not_in | gte | lte | between), and value (a scalar, a list "
-    "for in/not_in, or [low, high] for between). For soft_preference and qualitative criteria, set "
-    "field, operator, and value to null and give a weight in [0,1] reflecting emphasis.\n\n"
+    "    test — 'maximum two companies per industry', 'position size <= 5%', 'no more than 20 names'. "
+    "    Enforced when assembling the ranked list, NOT scored against any single company.\n\n"
+    "CRITICAL RULES:\n"
+    "  1. Directional / hedging language ('preferably', 'ideally', 'strong', 'high-quality', "
+    "     'lean toward', 'attractive') is NEVER a hard_constraint — it is core_principle or "
+    "     positive_preference, even when it names a metric like margins or ROIC.\n"
+    "  2. 'Avoid X' / 'no X' / 'companies with X' phrasing about a RED FLAG is a negative_constraint, "
+    "     not a positive. (e.g. 'avoid aggressive accounting' → negative_constraint, never a reason "
+    "     to own a company.) An explicit industry to avoid (tobacco, casinos) is ALSO mirrored in "
+    "     exclusions[] so it hard-filters.\n\n"
+    "For hard_constraint criteria fill field (country, market_cap, sector, industry), operator "
+    "(in | not_in | gte | lte | between), and value. For core_principle / positive_preference / "
+    "negative_constraint set field/operator/value to null (unless a clean numeric maps) and give a "
+    "weight reflecting emphasis/severity.\n\n"
     "Extract seed_tickers from any example companies named (use the ticker if you know it, else the "
-    "company name). Build semantic_query by concatenating the qualitative and soft-preference "
-    "language into a search string. Put explicit exclusions (e.g. 'exclude China') in exclusions "
-    "AND as a hard_constraint with operator not_in. Do not invent criteria the mandate does not state."
+    "company name). Build semantic_query by concatenating the core_principle and positive_preference "
+    "language into a search string. Put explicit exclusions (e.g. 'exclude China', 'no tobacco') in "
+    "exclusions AND as a hard_constraint with operator not_in. Do not invent criteria the mandate "
+    "does not state."
 )
 
 
@@ -135,7 +148,7 @@ def _normalize_criteria(criteria):
         out.append({
             "id": cid,
             "text": c.get("text", ""),
-            "type": c.get("type", "qualitative"),
+            "type": c.get("type", "positive_preference"),
             "field": c.get("field"),
             "operator": c.get("operator"),
             "value": c.get("value"),
@@ -221,11 +234,13 @@ def main(args):
     if ticker_note:
         final["seed_ticker_note"] = ticker_note
     if not final["summary"]:
-        n_hard = sum(1 for c in criteria if c["type"] == "hard_constraint")
-        n_soft = sum(1 for c in criteria if c["type"] == "soft_preference")
-        n_qual = sum(1 for c in criteria if c["type"] == "qualitative")
+        from collections import Counter
+        cnt = Counter(c["type"] for c in criteria)
+        cats = ", ".join(f"{cnt[k]} {k.replace('_', '-')}" for k in
+                         ("core_principle", "positive_preference", "hard_constraint",
+                          "negative_constraint", "portfolio_constraint") if cnt.get(k))
         final["summary"] = (
-            f"Parsed {len(criteria)} criteria ({n_hard} hard, {n_soft} soft, {n_qual} qualitative); "
+            f"Parsed {len(criteria)} criteria ({cats}); "
             f"{len(seed_tickers)} seed ticker(s); {len(exclusions)} exclusion(s)."
         )
     return final

@@ -58,6 +58,8 @@ SCHEMA = {
 # overall_fit is computed DETERMINISTICALLY in Python from the per-criterion verdicts
 # (the model only judges each criterion). meets=1, partial=0.5, does_not_meet=0.
 _VERDICT_VAL = {"meets": 1.0, "partial": 0.5, "does_not_meet": 0.0}
+# Categories that contribute POSITIVE fit (legacy soft/qualitative map in for back-compat).
+POSITIVE_TYPES = {"core_principle", "positive_preference", "soft_preference", "qualitative"}
 
 
 def _crit_weight(c):
@@ -69,29 +71,36 @@ def _crit_weight(c):
 
 
 def _rollup_overall_fit(results, criteria):
-    """Weight-aware roll-up over the criteria that actually express the mandate's
-    judgment — EXCLUDING hard_constraint (already enforced in Stage 1) and
-    portfolio_constraint (enforced in Stage 7). Falls back to all criteria if none qualify."""
+    """Weight-aware roll-up that respects mandate CATEGORIES:
+      * core_principle / positive_preference (+ legacy soft/qualitative) contribute positive
+        fit (meets=1, partial=0.5) weighted by importance — core principles carry the most
+        weight, so they dominate.
+      * negative_constraint contributes NO positive fit; a VIOLATION (does_not_meet) applies a
+        penalty scaled by severity weight. Merely avoiding the red flag earns nothing.
+      * hard_constraint (enforced in Stage 1) and portfolio_constraint (Stage 7) are excluded —
+        passing a hard requirement is never positive evidence.
+    Returns a [0,1] score."""
     meta = {c.get("id"): (c.get("type"), _crit_weight(c)) for c in criteria}
-    num = den = 0.0
+    num = den = penalty = 0.0
     for r in results:
         typ, w = meta.get(r.get("criterion_id"), (None, 1.0))
-        if typ in ("hard_constraint", "portfolio_constraint"):
-            continue
-        v = _VERDICT_VAL.get(r.get("verdict"))
+        verdict = r.get("verdict")
+        v = _VERDICT_VAL.get(verdict)
         if v is None:
             continue
-        num += w * v
-        den += w
-    if den <= 0:  # no soft/qualitative criteria — fall back to all scored verdicts
-        for r in results:
-            v = _VERDICT_VAL.get(r.get("verdict"))
-            if v is None:
-                continue
-            w = meta.get(r.get("criterion_id"), (None, 1.0))[1]
+        if typ == "negative_constraint":
+            # verdict semantics: meets = COMPLIES (clean, no effect); does_not_meet = VIOLATES.
+            if verdict == "does_not_meet":
+                penalty += 0.5 * w
+            elif verdict == "partial":
+                penalty += 0.25 * w
+        elif typ in ("hard_constraint", "portfolio_constraint"):
+            continue
+        else:  # POSITIVE_TYPES or unknown/None -> positive contributor
             num += w * v
             den += w
-    return round(num / den, 4) if den > 0 else 0.0
+    base = (num / den) if den > 0 else 0.0
+    return round(max(0.0, base - penalty), 4)
 
 SYSTEM = (
     "You are scoring a company against an investment mandate. For EACH criterion give a verdict "
@@ -99,7 +108,14 @@ SYSTEM = (
     "a quote from the provided filing text, and a confidence (high / medium / low). Quote the "
     "provided numbers exactly and never invent figures or facts not in the evidence base; if the "
     "evidence is insufficient for a criterion, mark confidence low and lean toward partial. "
-    "This is a FIT assessment, NOT a recommendation or investment thesis."
+    "This is a FIT assessment, NOT a recommendation or investment thesis.\n"
+    "VERDICT SEMANTICS BY CATEGORY:\n"
+    "  - core_principle / positive_preference: 'meets' = the company HAS this desirable trait.\n"
+    "  - negative_constraint (a red flag to AVOID, e.g. aggressive accounting, excessive leverage): "
+    "    'meets' = the company COMPLIES with the avoid-rule (it is CLEAN of the red flag); "
+    "    'does_not_meet' = the company VIOLATES it (the red flag IS present). A clean company earns "
+    "    no points for a negative_constraint; only a violation matters (it penalizes).\n"
+    "  - hard_constraint: judge pass/fail factually; it earns no fit points either way."
 )
 
 

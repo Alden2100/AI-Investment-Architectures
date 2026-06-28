@@ -2,7 +2,8 @@
 name: mandate-parser
 version: 1.0.0
 description: Turn a raw investment mandate (free text) into a structured MandateSpec, classifying
-  every criterion as hard_constraint, soft_preference, or qualitative. Use when someone hands you a
+  every criterion as core_principle, positive_preference, hard_constraint, negative_constraint, or
+  portfolio_constraint. Use when someone hands you a
   mandate, an IPS, a screening brief, or a "find me companies that ..." paragraph and you need it
   parsed into machine-actionable constraints, seed tickers, and a semantic query. This is Stage 0 of
   idea-sourcing v2 — it produces the spec the downstream screener/ranker consume.

@@ -66,7 +66,11 @@ def _minmax(values):
 
 
 def _industry_words(soft_criteria):
-    """Collect industry words from soft/qualitative criteria for industry_fit."""
+    """Collect industry words for industry_fit: explicitly-fielded industry criteria, plus
+    any known sector word (shared SECTOR_SYNONYMS keys) appearing in criterion text — so a
+    text-only preference like 'enterprise software' still registers. Word-boundary matched."""
+    import re
+    keys = sorted(sectors.SECTOR_SYNONYMS.keys(), key=len, reverse=True)
     words = []
     for c in soft_criteria:
         field = (c.get("field") or "").lower().strip()
@@ -74,8 +78,10 @@ def _industry_words(soft_criteria):
             for elem in (c.get("value") if isinstance(c.get("value"), list) else [c.get("value")]):
                 if elem and _to_float(elem) is None:
                     words.append(str(elem).lower().strip())
-        # also harvest free-text words that name an industry are not reliable; we
-        # stick to explicitly-fielded industry criteria for determinism.
+        txt = (c.get("text") or "").lower()
+        for k in keys:
+            if re.search(r"\b" + re.escape(k) + r"\b", txt):
+                words.append(k)
     return [w for w in words if w]
 
 
@@ -86,8 +92,11 @@ def main(args):
         survivors = survivors["survivors"]
 
     criteria = mandate.get("criteria") or []
+    # Positive, scoreable preferences (new core_principle/positive_preference categories;
+    # legacy soft_preference/qualitative map in for back-compat).
     soft = [c for c in criteria
-            if (c.get("type") or "").lower() in ("soft_preference", "qualitative")]
+            if (c.get("type") or "").lower() in
+            ("core_principle", "positive_preference", "soft_preference", "qualitative")]
 
     # Which factors does the mandate actually care about, and at what weight?
     factor_weight = {}

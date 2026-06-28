@@ -39,19 +39,27 @@ def _crit_meta(mandate):
     return out
 
 
+# Only these categories are positive REASONS to own a company. Avoiding a red flag
+# (negative_constraint) or passing a hard requirement is never a "top reason".
+_POSITIVE_TYPES = {"core_principle", "positive_preference", "soft_preference", "qualitative"}
+
+
 def _top_reasons(crs, cmeta, n=3):
-    """Top reasons a name fits, ranked by criterion IMPORTANCE (weight). Only 'meets'
-    on the criteria that actually express the mandate's judgment — excludes already-
-    enforced hard constraints and portfolio constraints (no boilerplate tautologies)."""
+    """Top reasons a name fits, ranked by criterion IMPORTANCE (weight). Only 'meets' on
+    POSITIVE categories (core_principle / positive_preference) — never hard constraints
+    (tautologies), portfolio constraints, or negative constraints ('avoid X' is not a
+    reason to own a company). Core principles outrank preferences via their higher weight."""
     cand = []
     for cr in crs:
         if cr.get("verdict") != "meets":
             continue
         typ, w, text = cmeta.get(cr.get("criterion_id"), (None, 1.0, None))
-        if typ in ("hard_constraint", "portfolio_constraint"):
+        if typ not in _POSITIVE_TYPES and typ is not None:
             continue
-        cand.append((w, {"criterion": text or cr.get("criterion_text"),
-                         "evidence": cr.get("evidence")}))
+        # core principles get a tiebreak bump so they lead the reasons list
+        bump = 1.0 if typ == "core_principle" else 0.0
+        cand.append((w + bump, {"criterion": text or cr.get("criterion_text"),
+                                "evidence": cr.get("evidence")}))
     cand.sort(key=lambda x: -x[0])
     return [c for _, c in cand[:n]]
 
