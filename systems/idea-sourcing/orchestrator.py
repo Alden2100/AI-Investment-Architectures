@@ -28,7 +28,7 @@ import uuid
 from imdata import store
 from imrouter import orchestration as orch
 
-from stages import _cache, stage7_rank
+from stages import _cache, stage7_rank, stage0b_warm
 from stages import (stage0_mandate, stage1_universe_filter, stage2_factor_rank,
                     stage3_text_similarity, stage4_scorecard, stage5_catalyst,
                     stage6_qualitative)
@@ -80,6 +80,17 @@ def main(args):
                     "run_id": run_id}
     mandate_hash = mandate.get("mandate_hash", "")
     store.start_run(run_id, mandate_hash, mandate)
+
+    # ---- Stage 0b: mandate-driven universe warming (once, before Stage 1) ----
+    # Default ON for a full --mandate run; OFF for --spec-file reruns/tests unless --warm.
+    do_warm = (not getattr(args, "no_warm", False)) and (bool(getattr(args, "mandate", None))
+                                                         or getattr(args, "warm", False))
+    warming = None
+    if do_warm:
+        warming = stage0b_warm.run(
+            mandate,
+            max_classify=int(getattr(args, "max_classify", 1500) or 1500),
+            warm_cap=int(getattr(args, "warm_cap", 400) or 400))
 
     # ---- Stage 1: hard-constraint filter (deterministic, once) + reject log ----
     filt = stage1_universe_filter.run(mandate)
@@ -230,6 +241,7 @@ def main(args):
                     "seed_tickers": mandate.get("seed_tickers", []),
                     "exclusions": mandate.get("exclusions", [])},
         "coverage": filt.get("coverage"),
+        "warming": warming,
         "n_survivors": len(survivors),
         "n_rejects": len(filt.get("rejects", [])) + len(dropped),
         "ranked": ranked_rows,
@@ -247,6 +259,10 @@ if __name__ == "__main__":
     p.add_argument("--mandate", help="free-text mandate")
     p.add_argument("--spec-file", help="a pre-parsed MandateSpec JSON (skips Stage 0)")
     p.add_argument("--top-k", type=int, default=6, help="how many survivors enter the expensive stages")
+    p.add_argument("--no-warm", action="store_true", help="skip Stage 0b mandate-driven warming")
+    p.add_argument("--warm", action="store_true", help="force Stage 0b warming even for a --spec-file run")
+    p.add_argument("--max-classify", type=int, default=1500, help="Stage 0b: max names to classify per run (resumable)")
+    p.add_argument("--warm-cap", type=int, default=400, help="Stage 0b: max candidates to warm (market cap + liquidity) per run")
     a = p.parse_args()
     if not a.mandate and not a.spec_file:
         raise SystemExit("provide --mandate or --spec-file")

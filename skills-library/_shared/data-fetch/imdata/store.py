@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS company_metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_mcap ON company_metrics(market_cap);
 
+-- Cheap classification (SIC + country) for the WHOLE universe, from one SEC
+-- submissions call per name (no price/quote fetch). Lets the Stage-0b prescreen
+-- narrow ~10k names to a mandate-relevant candidate set BEFORE the expensive
+-- market-cap/liquidity warm runs. Kept separate from company_metrics (which needs
+-- price data) so the cheap classification can cover far more names.
+CREATE TABLE IF NOT EXISTS company_classification (
+    ticker          TEXT PRIMARY KEY,
+    sic             INTEGER,
+    sic_description TEXT,
+    country         TEXT,
+    classified_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_classification_sic ON company_classification(sic);
+
 -- Idea-sourcing v2 Evidence Store -------------------------------------------
 -- One row per orchestrator run. mandate_hash is the cache handle; the routing
 -- ledger is snapshotted at finish so a run's model mix is replayable.
@@ -426,6 +440,55 @@ def stale_tickers(ttl_seconds: int, limit: int) -> list[str]:
         "LEFT JOIN company_metrics m ON m.ticker = c.ticker "
         "WHERE m.ticker IS NULL OR m.snapshot_at IS NULL OR m.snapshot_at < ? "
         "ORDER BY (m.snapshot_at IS NULL) DESC, m.snapshot_at ASC "
+        "LIMIT ?", (cutoff, int(limit))
+    ).fetchall()
+    return [r["ticker"] for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Cheap classification (SIC + country) — Stage-0b prescreen
+# --------------------------------------------------------------------------- #
+def upsert_classification(rows: Iterable[dict]) -> None:
+    """Each row: {ticker, sic, sic_description, country}. classified_at is stamped here."""
+    now = _now_iso()
+    with _tx() as c:
+        for r in rows:
+            c.execute(
+                "INSERT INTO company_classification "
+                "(ticker, sic, sic_description, country, classified_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(ticker) DO UPDATE SET sic=excluded.sic, "
+                "sic_description=excluded.sic_description, country=excluded.country, "
+                "classified_at=excluded.classified_at",
+                ((r.get("ticker") or "").upper(),
+                 (int(r["sic"]) if str(r.get("sic") or "").strip() not in ("", "None") else None),
+                 r.get("sic_description"), r.get("country"), now),
+            )
+
+
+def all_classification() -> list[sqlite3.Row]:
+    """Every classification row joined to the company title."""
+    return get_conn().execute(
+        "SELECT cc.*, c.title FROM company_classification cc "
+        "LEFT JOIN companies c ON c.ticker = cc.ticker"
+    ).fetchall()
+
+
+def classification_count() -> int:
+    return get_conn().execute(
+        "SELECT COUNT(*) AS n FROM company_classification").fetchone()["n"]
+
+
+def tickers_needing_classification(ttl_seconds: int, limit: int) -> list[str]:
+    """Universe tickers with no (or stale) classification: never-classified first.
+    Resumable across calls so a full-universe classification pages over many runs."""
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                           time.gmtime(time.time() - max(0, ttl_seconds)))
+    rows = get_conn().execute(
+        "SELECT c.ticker AS ticker FROM companies c "
+        "LEFT JOIN company_classification cc ON cc.ticker = c.ticker "
+        "WHERE cc.ticker IS NULL OR cc.classified_at IS NULL OR cc.classified_at < ? "
+        "ORDER BY (cc.classified_at IS NULL) DESC, cc.classified_at ASC "
         "LIMIT ?", (cutoff, int(limit))
     ).fetchall()
     return [r["ticker"] for r in rows]

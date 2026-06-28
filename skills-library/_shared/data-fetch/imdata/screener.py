@@ -22,7 +22,10 @@ import argparse
 import json
 from typing import Optional
 
-from . import config, edgar, estimates, prices, store, universe
+from . import config, edgar, estimates, prices, sectors, store, universe
+
+# Classification (SIC + country) changes rarely; cache it longer than price metrics.
+CLASSIFY_TTL = int(getattr(config, "TTL_CLASSIFICATION", 30 * 24 * 3600))
 
 # Cover-page share-count tags, in preference order.
 SHARES_TAGS = ["EntityCommonStockSharesOutstanding", "CommonStockSharesOutstanding"]
@@ -203,6 +206,87 @@ def refresh_metrics(tickers=None, max_names: int = 500, provider=None) -> dict:
     if tickers is not None and skipped:
         out["skipped_unknown"] = skipped
     return out
+
+
+def _mandate_sectors(mandate: dict):
+    """Extract (preferred_words, avoid_words, countries) from a MandateSpec for the
+    cheap prescreen. Industry words are matched against the shared SECTOR_SYNONYMS keys
+    that appear in criterion text / values; geography from explicit hard country rules."""
+    import re
+    keys = sorted(sectors.SECTOR_SYNONYMS.keys(), key=len, reverse=True)
+
+    def find(text):
+        t = (text or "").lower()
+        # word-boundary match so short keys don't match inside longer words
+        # ("auto" must not fire on "automation"; "oil" not on "boiling").
+        return {k for k in keys if re.search(r"\b" + re.escape(k) + r"\b", t)}
+
+    def vals_of(c):
+        v = c.get("value")
+        return v if isinstance(v, list) else ([v] if v is not None else [])
+
+    preferred, avoid, countries = set(), set(), []
+    for c in mandate.get("criteria", []) or []:
+        typ, op = c.get("type"), (c.get("operator") or "").lower()
+        fld, txt = (c.get("field") or "").lower(), c.get("text", "")
+        is_sector_field = fld in ("sic", "sector", "industry")
+        if fld == "country" and typ == "hard_constraint" and op == "in":
+            countries += [str(v).upper() for v in vals_of(c)]
+        if typ == "hard_constraint" and op in ("not_in", "notin", "not in") and is_sector_field:
+            for v in vals_of(c):
+                avoid |= find(str(v))
+        if typ in ("soft_preference", "qualitative") or (typ == "hard_constraint" and op == "in" and is_sector_field):
+            preferred |= find(txt)
+            if is_sector_field and op == "in":
+                for v in vals_of(c):
+                    preferred |= find(str(v))
+    preferred |= find(mandate.get("semantic_query", ""))
+    for e in (mandate.get("exclusions", []) or []):
+        avoid |= find(str(e if not isinstance(e, dict) else e.get("text") or e.get("industry") or ""))
+    preferred -= avoid  # an avoided sector is never also a preferred one
+    return sorted(preferred), sorted(avoid), countries
+
+
+def prescreen_universe(mandate: dict, max_classify: int = 2000,
+                       ttl: int = CLASSIFY_TTL) -> dict:
+    """Stage-0b: cheap SIC/country classification over the FULL universe (one SEC
+    submissions call per name, no price fetch), then narrow to a mandate-relevant
+    candidate list. Bounded + resumable: classifies up to ``max_classify`` not-yet-
+    classified names per call; classification persists (CLASSIFY_TTL) so coverage
+    grows across runs. NO SILENT DROPS — names outside the candidate set are simply
+    not warmed this run; they remain classified and queryable."""
+    if store.companies_count() == 0:
+        universe.refresh_universe()
+
+    todo = store.tickers_needing_classification(ttl, max_classify)
+    rows, fail = [], 0
+    for t in todo:
+        try:
+            m = edgar.company_meta(t)
+            rows.append({"ticker": t, "sic": m.get("sic"),
+                         "sic_description": m.get("sic_description"), "country": m.get("country")})
+        except Exception:
+            fail += 1
+    if rows:
+        store.upsert_classification(rows)
+
+    preferred, avoid, countries = _mandate_sectors(mandate)
+    candidates = []
+    for r in store.all_classification():
+        sic, desc, ctry = r["sic"], r["sic_description"], r["country"]
+        if countries and ctry and str(ctry).upper() not in countries:
+            continue  # explicit geography hard-cut
+        if avoid and sectors.matches_any(avoid, sic, desc):
+            continue  # avoid-list industries (hard exclusion)
+        if preferred and not sectors.matches_any(preferred, sic, desc):
+            continue  # narrow to preferred industries (warming budget)
+        candidates.append(r["ticker"])
+    return {
+        "classified_total": store.classification_count(),
+        "newly_classified": len(rows), "classify_failed": fail,
+        "preferred": preferred, "avoid": avoid, "countries": countries,
+        "candidates": candidates,
+    }
 
 
 def _main():

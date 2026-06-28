@@ -72,79 +72,15 @@ def _is_number(v):
     return _to_float(v) is not None and not (isinstance(v, str) and not v.strip())
 
 
-# Sector words rarely match SIC *description* text verbatim (a mandate says
-# "restaurants"; EDGAR says "Retail-Eating Places"). Expand common sector words to
-# the description tokens and SIC-code prefixes that actually occur, mirroring
-# research/universe-screener's SECTOR_SYNONYMS. A value is a list of description
-# substrings, or a {"desc": [...], "sic": [<code prefixes>]} dict.
-SECTOR_SYNONYMS = {
-    "software": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
-    "saas": {"desc": ["software"], "sic": ["7372", "7370", "7371", "7389"]},
-    "restaurant": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813", "5814"]},
-    "restaurants": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813", "5814"]},
-    "fast food": {"desc": ["eating"], "sic": ["5812", "5810"]},
-    "quick service": {"desc": ["eating"], "sic": ["5812", "5810"]},
-    "quick service restaurants": {"desc": ["eating"], "sic": ["5812", "5810"]},
-    "qsr": {"desc": ["eating"], "sic": ["5812", "5810"]},
-    "casual dining": {"desc": ["eating"], "sic": ["5812", "5810"]},
-    "dining": {"desc": ["eating", "drinking places"], "sic": ["5812", "5810", "5813"]},
-    "biotech": ["biological", "life sciences", "physical & biological research"],
-    "biotechnology": ["biological", "life sciences", "physical & biological research"],
-    "reit": ["real estate investment trust"],
-    "reits": ["real estate investment trust"],
-    "defense": {"desc": ["guided missile", "ordnance", "ammunition"],
-                "sic": ["348", "3760", "3761", "3795", "3812"]},
-    "defence": {"desc": ["guided missile", "ordnance", "ammunition"],
-                "sic": ["348", "3760", "3761", "3795", "3812"]},
-    "thrift": ["savings institution"],
-    "savings": ["savings institution"],
-    "auto": ["motor vehicle"],
-    "automotive": ["motor vehicle"],
-    "airline": ["air transportation"],
-    "airlines": ["air transportation"],
-    "telecom": ["telephone", "telegraph", "communications services"],
-    "oil": ["crude petroleum", "petroleum refining", "oil & gas"],
-    "gas": ["crude petroleum", "natural gas", "oil & gas"],
-    "healthcare": {"desc": ["health", "medical", "pharmaceutical", "hospital"],
-                   "sic": ["80", "2834", "2836", "3841", "3845"]},
-}
+# Sector/SIC matching lives in the shared imdata.sectors module so this Stage-1 filter
+# and the Stage-0b prescreen (screener.py) use ONE implementation + synonym map.
+from imdata import sectors  # noqa: E402
 
-
-def _word_matches(word, sic_str, desc):
-    """True if a sector WORD matches a row, expanding synonyms to description tokens
-    and SIC-code prefixes; falls back to a raw substring of the description."""
-    syn = SECTOR_SYNONYMS.get(word)
-    if isinstance(syn, dict):
-        if any(s in desc for s in syn.get("desc", [])):
-            return True
-        if any(sic_str.startswith(p) for p in syn.get("sic", [])):
-            return True
-    elif isinstance(syn, list):
-        if any(s in desc for s in syn):
-            return True
-    return bool(word) and word in desc  # raw fallback
+SECTOR_SYNONYMS = sectors.SECTOR_SYNONYMS  # back-compat alias
 
 
 def _sic_token_match(value, sic, sic_desc):
-    """For sic in/not_in membership tests. A value element matches a row when it
-    equals the int SIC code, OR (when it is a word) matches via synonym expansion
-    (description tokens / SIC-code prefixes) or a raw description substring."""
-    desc = (sic_desc or "").lower()
-    sic_str = str(sic) if sic is not None else ""
-    sic_i = None
-    try:
-        sic_i = int(sic) if sic is not None else None
-    except (TypeError, ValueError):
-        sic_i = None
-    for elem in _as_list(value):
-        ev = _to_float(elem)
-        if ev is not None:
-            if sic_i is not None and int(ev) == sic_i:
-                return True
-        else:
-            if _word_matches(str(elem).lower().strip(), sic_str, desc):
-                return True
-    return False
+    return sectors.sic_token_match(value, sic, sic_desc)
 
 
 def _test(operator, col, metric, value):
